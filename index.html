@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1, user-scalable=no" />
+<title>Dodentocht 2026 Companion</title>
+
+<meta name="theme-color" content="#0a0a0e" />
+<meta name="color-scheme" content="dark" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="Dodentocht" />
+<link rel="apple-touch-icon" href="icon-192.png" />
+<link rel="manifest" href="manifest.webmanifest" />
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+<!-- ======================= HEADER ======================= -->
+<header class="app-header">
+  <div class="status-pill" id="statusPill">
+    <span class="status-dot" id="statusDot"></span>
+    <span id="statusLabel">Klaar om te starten</span>
+  </div>
+  <button class="icon-btn" id="fullscreenBtn" aria-label="Volledig scherm" title="Volledig scherm">⤢</button>
+</header>
+
+<!-- ======================= SCREENS ======================= -->
+<main id="screens">
+
+  <!-- ---------- DASHBOARD ---------- -->
+  <section id="screen-dashboard" class="screen active">
+
+    <div class="progressbar">
+      <div class="progressbar-fill" id="progressFill"></div>
+    </div>
+
+    <div class="glass card hero-card">
+      <div class="hero-main">
+        <div class="hero-number" id="distanceValue">0.0</div>
+        <div class="hero-unit">km afgelegd</div>
+      </div>
+      <div class="hero-sub" id="remainingLabel">100.0 km te gaan</div>
+    </div>
+
+    <div class="grid-2">
+      <div class="glass card stat-card">
+        <div class="stat-label">Tempo</div>
+        <div class="stat-value" id="paceValue">–</div>
+        <div class="stat-unit">km/u gemiddeld</div>
+      </div>
+      <div class="glass card stat-card">
+        <div class="stat-label">Snelheid nu</div>
+        <div class="stat-value" id="speedValue">–</div>
+        <div class="stat-unit">km/u</div>
+      </div>
+      <div class="glass card stat-card">
+        <div class="stat-label">Tijd onderweg</div>
+        <div class="stat-value" id="elapsedValue">00:00</div>
+        <div class="stat-unit" id="pauseValue">0 min pauze</div>
+      </div>
+      <div class="glass card stat-card">
+        <div class="stat-label">Verwachte finish</div>
+        <div class="stat-value" id="etaValue">–:–</div>
+        <div class="stat-unit" id="marginValue">–</div>
+      </div>
+    </div>
+
+    <div class="glass card next-cp-card" id="nextCpCard">
+      <div class="next-cp-top">
+        <span class="eyebrow">Volgende post</span>
+        <span class="next-cp-dist" id="nextCpDist">–</span>
+      </div>
+      <div class="next-cp-name" id="nextCpName">–</div>
+      <div class="next-cp-meta" id="nextCpMeta">–</div>
+    </div>
+
+    <div class="glass card status-banner" id="statusBanner">
+      <div class="status-banner-title" id="statusBannerTitle">Comfortabel op schema</div>
+      <div class="status-banner-text" id="statusBannerText">Houd je eigen ritme.</div>
+    </div>
+
+    <div id="toastStack" class="toast-stack"></div>
+
+    <div class="dashboard-actions">
+      <button class="pill-btn" id="startBtn">Start tocht</button>
+      <button class="pill-btn ghost" id="pauseToggleBtn" style="display:none;">Pauze starten</button>
+      <button class="pill-btn ghost" id="checklistBtn">Voet- &amp; lichaamscheck</button>
+      <button class="pill-btn ghost" id="recalibrateBtn">GPS herkalibreren</button>
+    </div>
+  </section>
+
+  <!-- ---------- CONTROLEPOSTEN ---------- -->
+  <section id="screen-checkpoints" class="screen">
+    <h1 class="screen-title">Controleposten</h1>
+    <div id="checkpointList" class="checkpoint-list"></div>
+  </section>
+
+  <!-- ---------- KAART ---------- -->
+  <section id="screen-map" class="screen">
+    <div class="map-wrap">
+      <canvas id="routeCanvas"></canvas>
+      <div class="map-empty" id="mapEmpty">Route nog niet geladen. Kies een GPX-bestand bij Correctie.</div>
+
+      <div class="map-toolbar">
+        <button class="map-btn" id="mapResetBtn" aria-label="Centreer op volledige route" title="Centreer op volledige route">⤢</button>
+        <button class="map-btn" id="mapFollowBtn" aria-label="Volg mijn positie" title="Volg mijn positie">◎</button>
+      </div>
+
+      <div class="map-legend glass">
+        <div class="map-legend-row"><span class="legend-dot me"></span>Jouw positie</div>
+        <div class="map-legend-row"><span class="legend-dot cp"></span>Controlepost</div>
+        <div class="map-legend-row"><span class="legend-dot cp done"></span>Al bereikt</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ---------- CORRECTIE ---------- -->
+  <section id="screen-correction" class="screen">
+    <h1 class="screen-title">Manuele correctie</h1>
+    <p class="screen-hint">Gebruik dit scherm als GPS uitvalt of afwijkt.</p>
+
+    <div class="glass card form-card">
+      <label class="field-label" for="corrKm">Huidige kilometer</label>
+      <input type="number" id="corrKm" step="0.1" min="0" max="100" inputmode="decimal" />
+
+      <label class="field-label" for="corrCp">Huidige controlepost</label>
+      <select id="corrCp"></select>
+
+      <label class="field-label" for="corrStart">Starttijd</label>
+      <input type="datetime-local" id="corrStart" />
+
+      <label class="field-label" for="corrPause">Totale pauzetijd (minuten)</label>
+      <input type="number" id="corrPause" min="0" step="1" inputmode="numeric" />
+
+      <button class="pill-btn" id="applyCorrectionBtn">Toepassen</button>
+    </div>
+
+    <div class="glass card form-card">
+      <div class="field-label">Route-bestand (GPX)</div>
+      <p class="screen-hint">Als route.gpx niet automatisch geladen is, kies hier het officiële GPX-bestand van de organisatie.</p>
+      <input type="file" id="gpxFileInput" accept=".gpx" />
+      <div id="gpxStatus" class="gpx-status"></div>
+    </div>
+  </section>
+
+  <!-- ---------- INSTELLINGEN ---------- -->
+  <section id="screen-settings" class="screen">
+    <h1 class="screen-title">Instellingen</h1>
+
+    <div class="glass card settings-card">
+      <div class="setting-row">
+        <div>
+          <div class="setting-title">Energiebesparende GPS</div>
+          <div class="setting-desc">Minder frequente GPS-updates, langere batterijduur.</div>
+        </div>
+        <label class="switch"><input type="checkbox" id="powerSavingToggle" /><span></span></label>
+      </div>
+      <div class="setting-row">
+        <div>
+          <div class="setting-title">Herinneringen</div>
+          <div class="setting-desc">Drinken, eten, voetcheck en afstandsmeldingen.</div>
+        </div>
+        <label class="switch"><input type="checkbox" id="remindersToggle" /><span></span></label>
+      </div>
+      <div class="setting-row">
+        <div>
+          <div class="setting-title">Meldingen op scherm-uit</div>
+          <div class="setting-desc">Vraagt toestemming voor browsernotificaties.</div>
+        </div>
+        <button class="pill-btn small" id="notifPermBtn">Toestaan</button>
+      </div>
+      <div class="setting-row">
+        <div>
+          <div class="setting-title">Beeldscherm actief houden</div>
+          <div class="setting-desc">Voorkomt dat het scherm automatisch dooft.</div>
+        </div>
+        <label class="switch"><input type="checkbox" id="wakeLockToggle" /><span></span></label>
+      </div>
+    </div>
+
+    <div class="glass card settings-card">
+      <button class="pill-btn ghost full" id="exportBtn">Exporteer tochtdata (JSON)</button>
+      <button class="pill-btn ghost full danger" id="resetBtn">Tocht resetten</button>
+    </div>
+
+    <p class="version-tag">Dodentocht 2026 Companion · offline-first PWA</p>
+  </section>
+
+</main>
+
+<!-- ======================= BOTTOM NAV ======================= -->
+<nav class="tabbar">
+  <button class="tab-btn active" data-screen="dashboard">
+    <span class="tab-icon">●</span><span>Vandaag</span>
+  </button>
+  <button class="tab-btn" data-screen="checkpoints">
+    <span class="tab-icon">▤</span><span>Posten</span>
+  </button>
+  <button class="tab-btn" data-screen="map">
+    <span class="tab-icon">◈</span><span>Kaart</span>
+  </button>
+  <button class="tab-btn" data-screen="correction">
+    <span class="tab-icon">✎</span><span>Correctie</span>
+  </button>
+  <button class="tab-btn" data-screen="settings">
+    <span class="tab-icon">⚙</span><span>Instellingen</span>
+  </button>
+</nav>
+
+<!-- ======================= CHECKLIST MODAL ======================= -->
+<div id="checklistModal" class="modal-overlay">
+  <div class="modal-sheet glass">
+    <div class="modal-handle"></div>
+    <h2 class="modal-title">Voet- &amp; lichaamscheck</h2>
+    <div class="checklist-items" id="checklistItems"></div>
+    <div id="checklistWarning" class="checklist-warning" style="display:none;">
+      Zoek rustig medische hulp op de eerstvolgende officiële controlepost.
+    </div>
+    <div class="modal-actions">
+      <button class="pill-btn ghost" id="checklistCancelBtn">Sluiten</button>
+      <button class="pill-btn" id="checklistSaveBtn">Opslaan</button>
+    </div>
+  </div>
+</div>
+
+<script src="checkpoints.js"></script>
+<script src="route.js"></script>
+<script src="map.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
