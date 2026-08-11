@@ -271,6 +271,25 @@ button, input, select {
 }
 
 #routeCanvas { display: block; width: 100%; height: 100%; }
+.leaflet-map { width: 100%; height: 100%; background: #1a1a1a; }
+
+/* Donkere, Apple-achtige styling voor Leaflet's ingebouwde besturingselementen */
+.leaflet-control-zoom a {
+  background: rgba(20,20,26,0.9) !important;
+  color: var(--text-primary) !important;
+  border-color: var(--glass-border) !important;
+}
+.leaflet-control-attribution {
+  background: rgba(10,10,14,0.75) !important;
+  color: var(--text-tertiary) !important;
+  font-size: 10px !important;
+}
+.leaflet-control-attribution a { color: var(--text-secondary) !important; }
+.leaflet-popup-content-wrapper, .leaflet-popup-tip {
+  background: #16161c !important;
+  color: var(--text-primary) !important;
+}
+.leaflet-popup-content { font-size: 13px !important; }
 
 .map-empty {
   position: absolute; inset: 0;

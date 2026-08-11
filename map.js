@@ -1,259 +1,213 @@
 /**
  * map.js
- * Tekent de volledige route + controleposten + live positie op een
- * <canvas>, zonder externe kaarttegels. Dit werkt daardoor volledig
- * offline, wat cruciaal is tijdens de tocht zelf.
+ * Echte kaart (straten, gebouwen, ...) op basis van Leaflet + OpenStreetMap-
+ * tegels, met de route, controleposten en live positie erop getekend.
  *
- * Ondersteunt pinch-to-zoom en slepen om in te zoomen op een stuk route,
- * plus een knop om terug naar het volledige overzicht te gaan.
+ * Kaarttegels komen normaal via internet. Om de kaart ook tijdens de tocht
+ * zonder bereik te laten werken, kan de gebruiker vooraf (thuis, via wifi)
+ * alle tegels langs de route downloaden — zie downloadRouteTiles(). Die
+ * tegels worden bewaard in de Cache Storage van de browser onder
+ * TILE_CACHE_NAME, en sw.js dient ze nadien cache-first terug, ook offline.
  */
 
 "use strict";
 
+const TILE_CACHE_NAME = "doto2026-tiles-v1";
+const TILE_URL_TEMPLATE = "https://tile.openstreetmap.org/{z}/{x}/{y}.png";
+const OSM_ATTRIBUTION = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>-bijdragers';
+
 class MapView {
-  constructor(canvas, route, checkpoints) {
-    this.canvas = canvas;
-    this.ctx = canvas.getContext("2d");
+  constructor(elId, route, checkpoints) {
     this.route = route;
     this.checkpoints = checkpoints;
-
-    this.dpr = window.devicePixelRatio || 1;
-    this.bounds = null;      // {minLat,maxLat,minLon,maxLon}
-    this.baseTransform = null; // fit-to-screen transform
-    this.scale = 1;          // extra zoomfactor bovenop baseTransform
-    this.offsetX = 0;        // extra pan bovenop baseTransform (canvas px)
-    this.offsetY = 0;
-
-    this.userLatLon = null;  // {lat, lon}
+    this.userLatLon = null;
     this.reachedIds = new Set();
     this.followMode = false;
 
-    this._wireGestures();
-    window.addEventListener("resize", () => this.resize());
+    this.map = L.map(elId, {
+      zoomControl: false,
+      attributionControl: true,
+    }).setView([51.09, 4.24], 12); // voorlopig centrum, wordt overschreven zodra de route geladen is
+
+    L.tileLayer(TILE_URL_TEMPLATE, {
+      maxZoom: 18,
+      minZoom: 9,
+      attribution: OSM_ATTRIBUTION,
+    }).addTo(this.map);
+
+    L.control.zoom({ position: "bottomright" }).addTo(this.map);
+
+    this.routeLine = null;
+    this.walkedLine = null;
+    this.cpMarkers = new Map(); // id -> marker
+    this.userMarker = null;
+    this.userHalo = null;
   }
 
-  /* ---------------- Projectie ---------------- */
+  /* ---------------- Route & controleposten tekenen ---------------- */
 
-  computeBounds() {
+  renderRoute() {
     if (!this.route.loaded) return;
-    let minLat = Infinity, maxLat = -Infinity, minLon = Infinity, maxLon = -Infinity;
-    this.route.points.forEach((p) => {
-      if (p.lat < minLat) minLat = p.lat;
-      if (p.lat > maxLat) maxLat = p.lat;
-      if (p.lon < minLon) minLon = p.lon;
-      if (p.lon > maxLon) maxLon = p.lon;
-    });
-    this.bounds = { minLat, maxLat, minLon, maxLon };
-    this.latMid = (minLat + maxLat) / 2;
-    this.lonScale = Math.cos((this.latMid * Math.PI) / 180); // corrigeert breedtegraad-vervorming
-  }
 
-  /** Zet lat/lon om naar "wereld"-pixels vóór zoom/pan (equirectangulair, breedtegraad-gecorrigeerd). */
-  project(lat, lon) {
-    const x = (lon - this.bounds.minLon) * this.lonScale;
-    const y = this.bounds.maxLat - lat; // y groeit naar beneden op canvas
-    return { x, y };
-  }
+    const latlngs = this.route.points.map((p) => [p.lat, p.lon]);
 
-  resize() {
-    const wrap = this.canvas.parentElement;
-    const w = wrap.clientWidth, h = wrap.clientHeight;
-    this.dpr = window.devicePixelRatio || 1;
-    this.canvas.width = w * this.dpr;
-    this.canvas.height = h * this.dpr;
-    this.canvas.style.width = w + "px";
-    this.canvas.style.height = h + "px";
-    this.cssW = w;
-    this.cssH = h;
-    this.fitToRoute();
-  }
+    if (this.routeLine) this.map.removeLayer(this.routeLine);
+    this.routeLine = L.polyline(latlngs, {
+      color: "#f5f6f7",
+      weight: 4,
+      opacity: 0.65,
+    }).addTo(this.map);
 
-  /** Berekent de basistransform die de volledige route in het canvas past. */
-  fitToRoute() {
-    if (!this.route.loaded || !this.bounds) return;
-    const worldW = (this.bounds.maxLon - this.bounds.minLon) * this.lonScale || 0.0001;
-    const worldH = (this.bounds.maxLat - this.bounds.minLat) || 0.0001;
-    const padding = 36;
-    const availW = this.cssW - padding * 2;
-    const availH = this.cssH - padding * 2;
-    const scale = Math.min(availW / worldW, availH / worldH);
-
-    const drawnW = worldW * scale;
-    const drawnH = worldH * scale;
-    const offX = (this.cssW - drawnW) / 2;
-    const offY = (this.cssH - drawnH) / 2;
-
-    this.baseTransform = { scale, offX, offY };
-    this.scale = 1;
-    this.offsetX = 0;
-    this.offsetY = 0;
-  }
-
-  /** Wereld-coördinaat -> uiteindelijke canvas (CSS) pixel, incl. zoom/pan van de gebruiker. */
-  toScreen(lat, lon) {
-    const p = this.project(lat, lon);
-    const bt = this.baseTransform;
-    const x = p.x * bt.scale * this.scale + bt.offX * this.scale + this.offsetX;
-    const y = p.y * bt.scale * this.scale + bt.offY * this.scale + this.offsetY;
-    return { x, y };
-  }
-
-  /* ---------------- Tekenen ---------------- */
-
-  draw() {
-    const ctx = this.ctx;
-    const w = this.cssW, h = this.cssH;
-    if (!w || !h) return;
-
-    ctx.save();
-    ctx.scale(this.dpr, this.dpr);
-    ctx.clearRect(0, 0, w, h);
-
-    if (!this.route.loaded || !this.baseTransform) {
-      ctx.restore();
-      return;
-    }
-
-    // Routelijn
-    ctx.beginPath();
-    this.route.points.forEach((p, i) => {
-      const s = this.toScreen(p.lat, p.lon);
-      if (i === 0) ctx.moveTo(s.x, s.y); else ctx.lineTo(s.x, s.y);
-    });
-    ctx.strokeStyle = "rgba(245,246,247,0.55)";
-    ctx.lineWidth = 4;
-    ctx.lineJoin = "round";
-    ctx.lineCap = "round";
-    ctx.stroke();
-
-    // Afgelegd deel van de route, geaccentueerd
-    if (this.userLatLon) {
-      ctx.beginPath();
-      const proj = this.route.projectDistanceKm(this.userLatLon.lat, this.userLatLon.lon, null);
-      const cutIndex = proj ? proj.index : 0;
-      for (let i = 0; i <= cutIndex && i < this.route.points.length; i++) {
-        const p = this.route.points[i];
-        const s = this.toScreen(p.lat, p.lon);
-        if (i === 0) ctx.moveTo(s.x, s.y); else ctx.lineTo(s.x, s.y);
-      }
-      ctx.strokeStyle = "#4ade9a";
-      ctx.lineWidth = 5;
-      ctx.lineCap = "round";
-      ctx.stroke();
-    }
-
-    // Start & finish
-    this._drawDot(this.route.points[0], "#f5f6f7", 6);
-    this._drawDot(this.route.points[this.route.points.length - 1], "#f5f6f7", 6);
-
-    // Controleposten
     this.checkpoints.forEach((cp) => {
       if (cp.km === 0 || cp.km === 100) return;
       const pt = this.route.pointAtDistance(cp.km);
       if (!pt) return;
-      const reached = this.reachedIds.has(cp.id);
-      this._drawDot(pt, reached ? "#4ade9a" : "#f5b942", reached ? 5 : 6);
+      const marker = L.circleMarker([pt.lat, pt.lon], {
+        radius: 7,
+        color: "#0a0a0e",
+        weight: 2,
+        fillColor: "#f5b942",
+        fillOpacity: 1,
+      }).bindPopup(`<b>${cp.name}</b><br>${cp.km} km`);
+      marker.addTo(this.map);
+      this.cpMarkers.set(cp.id, marker);
     });
 
-    // Live positie
-    if (this.userLatLon) {
-      const s = this.toScreen(this.userLatLon.lat, this.userLatLon.lon);
-      ctx.beginPath();
-      ctx.arc(s.x, s.y, 11, 0, Math.PI * 2);
-      ctx.fillStyle = "rgba(74,222,154,0.22)";
-      ctx.fill();
-      ctx.beginPath();
-      ctx.arc(s.x, s.y, 6, 0, Math.PI * 2);
-      ctx.fillStyle = "#4ade9a";
-      ctx.fill();
-      ctx.lineWidth = 2;
-      ctx.strokeStyle = "#06140d";
-      ctx.stroke();
+    this.map.fitBounds(this.routeLine.getBounds(), { padding: [30, 30] });
+    document.getElementById("mapEmpty").style.display = "none";
+  }
+
+  /** Kaart terug op de volledige route centreren. */
+  resetView() {
+    this.followMode = false;
+    if (this.routeLine) {
+      this.map.fitBounds(this.routeLine.getBounds(), { padding: [30, 30] });
     }
-
-    ctx.restore();
   }
 
-  _drawDot(latlonPoint, color, r) {
-    const s = this.toScreen(latlonPoint.lat, latlonPoint.lon);
-    const ctx = this.ctx;
-    ctx.beginPath();
-    ctx.arc(s.x, s.y, r, 0, Math.PI * 2);
-    ctx.fillStyle = color;
-    ctx.fill();
-    ctx.lineWidth = 2;
-    ctx.strokeStyle = "#0a0a0e";
-    ctx.stroke();
+  /** Kaart moet opnieuw de juiste afmetingen kennen nadat het tabblad zichtbaar werd. */
+  invalidateSize() {
+    this.map.invalidateSize();
   }
 
-  /* ---------------- Publieke updates ---------------- */
+  /* ---------------- Live positie & voortgang ---------------- */
 
   setUserPosition(lat, lon) {
     this.userLatLon = { lat, lon };
-    if (this.followMode) this.centerOn(lat, lon);
+
+    if (!this.userMarker) {
+      this.userHalo = L.circleMarker([lat, lon], {
+        radius: 14, color: "transparent", fillColor: "#4ade9a", fillOpacity: 0.22,
+      }).addTo(this.map);
+      this.userMarker = L.circleMarker([lat, lon], {
+        radius: 7, color: "#06140d", weight: 2, fillColor: "#4ade9a", fillOpacity: 1,
+      }).addTo(this.map);
+    } else {
+      this.userHalo.setLatLng([lat, lon]);
+      this.userMarker.setLatLng([lat, lon]);
+    }
+
+    this._updateWalkedLine();
+
+    if (this.followMode) this.map.panTo([lat, lon], { animate: true });
+  }
+
+  _updateWalkedLine() {
+    if (!this.route.loaded || !this.userLatLon) return;
+    const proj = this.route.projectDistanceKm(this.userLatLon.lat, this.userLatLon.lon, null);
+    if (!proj) return;
+    const walked = this.route.points.slice(0, proj.index + 1).map((p) => [p.lat, p.lon]);
+
+    if (this.walkedLine) this.map.removeLayer(this.walkedLine);
+    this.walkedLine = L.polyline(walked, { color: "#4ade9a", weight: 5, opacity: 0.9 }).addTo(this.map);
   }
 
   setReached(idsSet) {
     this.reachedIds = idsSet;
+    this.cpMarkers.forEach((marker, id) => {
+      const reached = idsSet.has(id);
+      marker.setStyle({ fillColor: reached ? "#4ade9a" : "#f5b942" });
+    });
   }
+}
 
-  centerOn(lat, lon) {
-    if (!this.baseTransform) return;
-    const p = this.project(lat, lon);
-    const bt = this.baseTransform;
-    const targetX = p.x * bt.scale * this.scale + bt.offX * this.scale;
-    const targetY = p.y * bt.scale * this.scale + bt.offY * this.scale;
-    this.offsetX = this.cssW / 2 - targetX;
-    this.offsetY = this.cssH / 2 - targetY;
+/* ==========================================================================
+   OFFLINE TEGELS DOWNLOADEN
+   Berekent alle tegels die de bounding box van de route overlappen voor een
+   reeks zoomniveaus, en haalt ze één voor één op zodat ze in de Cache
+   Storage terechtkomen. Nadien dient sw.js dezelfde tegels cache-first,
+   ook zonder internet.
+   ========================================================================== */
+
+function lonToTileX(lon, z) {
+  return Math.floor(((lon + 180) / 360) * Math.pow(2, z));
+}
+function latToTileY(lat, z) {
+  const rad = (lat * Math.PI) / 180;
+  return Math.floor(
+    ((1 - Math.log(Math.tan(rad) + 1 / Math.cos(rad)) / Math.PI) / 2) * Math.pow(2, z)
+  );
+}
+
+function tilesForBounds(bounds, zoom, bufferTiles = 1) {
+  const xMin = lonToTileX(bounds.minLon, zoom) - bufferTiles;
+  const xMax = lonToTileX(bounds.maxLon, zoom) + bufferTiles;
+  // let op: bij hogere breedtegraad geeft een hogere lat een lagere tileY
+  const yMin = latToTileY(bounds.maxLat, zoom) - bufferTiles;
+  const yMax = latToTileY(bounds.minLat, zoom) + bufferTiles;
+
+  const tiles = [];
+  for (let x = xMin; x <= xMax; x++) {
+    for (let y = yMin; y <= yMax; y++) {
+      tiles.push({ z: zoom, x, y });
+    }
   }
+  return tiles;
+}
 
-  resetView() {
-    this.scale = 1;
-    this.offsetX = 0;
-    this.offsetY = 0;
-    this.followMode = false;
-  }
+/**
+ * Download alle tegels die de route overlappen voor zoom 12 t/m 16
+ * (overzicht t/m straatniveau) en bewaart ze in de Cache Storage.
+ * Roept onProgress(done, total) aan tijdens het lopen.
+ */
+async function downloadRouteTiles(route, onProgress) {
+  if (!route.loaded) throw new Error("Route nog niet geladen");
 
-  /* ---------------- Touch: pan & pinch-zoom ---------------- */
+  let minLat = Infinity, maxLat = -Infinity, minLon = Infinity, maxLon = -Infinity;
+  route.points.forEach((p) => {
+    if (p.lat < minLat) minLat = p.lat;
+    if (p.lat > maxLat) maxLat = p.lat;
+    if (p.lon < minLon) minLon = p.lon;
+    if (p.lon > maxLon) maxLon = p.lon;
+  });
+  const bounds = { minLat, maxLat, minLon, maxLon };
 
-  _wireGestures() {
-    const el = this.canvas;
-    let mode = null;
-    let lastX = 0, lastY = 0;
-    let lastDist = 0;
+  const zoomLevels = [12, 13, 14, 15, 16];
+  let allTiles = [];
+  zoomLevels.forEach((z) => {
+    allTiles = allTiles.concat(tilesForBounds(bounds, z, 1));
+  });
 
-    const dist = (t0, t1) => Math.hypot(t1.clientX - t0.clientX, t1.clientY - t0.clientY);
+  const cache = await caches.open(TILE_CACHE_NAME);
+  const total = allTiles.length;
+  let done = 0;
 
-    el.addEventListener("touchstart", (e) => {
-      this.followMode = false;
-      if (e.touches.length === 1) {
-        mode = "pan";
-        lastX = e.touches[0].clientX;
-        lastY = e.touches[0].clientY;
-      } else if (e.touches.length === 2) {
-        mode = "pinch";
-        lastDist = dist(e.touches[0], e.touches[1]);
+  for (const t of allTiles) {
+    const url = `https://tile.openstreetmap.org/${t.z}/${t.x}/${t.y}.png`;
+    try {
+      const existing = await cache.match(url);
+      if (!existing) {
+        const res = await fetch(url, { mode: "cors" });
+        if (res && res.ok) await cache.put(url, res.clone());
       }
-    }, { passive: true });
-
-    el.addEventListener("touchmove", (e) => {
-      if (mode === "pan" && e.touches.length === 1) {
-        const dx = e.touches[0].clientX - lastX;
-        const dy = e.touches[0].clientY - lastY;
-        this.offsetX += dx;
-        this.offsetY += dy;
-        lastX = e.touches[0].clientX;
-        lastY = e.touches[0].clientY;
-        this.draw();
-      } else if (mode === "pinch" && e.touches.length === 2) {
-        const d = dist(e.touches[0], e.touches[1]);
-        const factor = d / (lastDist || d);
-        this.scale = Math.max(0.6, Math.min(12, this.scale * factor));
-        lastDist = d;
-        this.draw();
-      }
-    }, { passive: true });
-
-    el.addEventListener("touchend", () => { mode = null; }, { passive: true });
+    } catch (e) {
+      // enkele mislukte tegels (bv. tijdelijk geen netwerk) mogen de rest niet blokkeren
+    }
+    done++;
+    if (onProgress) onProgress(done, total);
+    // korte pauze tussen aanvragen: respectvol tegenover de gratis OSM-tegelserver
+    await new Promise((r) => setTimeout(r, 40));
   }
+
+  return { total, done };
 }

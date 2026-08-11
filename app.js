@@ -173,12 +173,7 @@ function setGpxStatus(msg, kind) {
 function afterRouteLoaded() {
   renderCheckpointList();
   renderDashboard();
-  document.getElementById("mapEmpty").style.display = "none";
-  if (mapView) {
-    mapView.computeBounds();
-    mapView.resize();
-    mapView.draw();
-  }
+  if (mapView) mapView.renderRoute();
 }
 
 /* ==========================================================================
@@ -194,8 +189,9 @@ function showScreen(name) {
   if (name === "checkpoints") renderCheckpointList();
   if (name === "correction") populateCorrectionForm();
   if (name === "map" && mapView) {
-    // canvas had tot nu toe display:none, dus pas nu de echte afmetingen kennen
-    requestAnimationFrame(() => { mapView.resize(); mapView.draw(); });
+    // de kaart-container had tot nu toe display:none, dus pas nu de echte
+    // afmetingen kennen (anders toont Leaflet grijze/lege vakken)
+    requestAnimationFrame(() => mapView.invalidateSize());
   }
 }
 
@@ -909,16 +905,38 @@ document.getElementById("mapResetBtn").addEventListener("click", () => {
   if (!mapView) return;
   mapView.resetView();
   document.getElementById("mapFollowBtn").classList.remove("active");
-  mapView.draw();
 });
 document.getElementById("mapFollowBtn").addEventListener("click", (e) => {
   if (!mapView) return;
   mapView.followMode = !mapView.followMode;
   e.currentTarget.classList.toggle("active", mapView.followMode);
   if (mapView.followMode && mapView.userLatLon) {
-    mapView.centerOn(mapView.userLatLon.lat, mapView.userLatLon.lon);
+    mapView.map.panTo([mapView.userLatLon.lat, mapView.userLatLon.lon], { animate: true });
   }
-  mapView.draw();
+});
+
+document.getElementById("downloadTilesBtn").addEventListener("click", async () => {
+  const statusEl = document.getElementById("tileDownloadStatus");
+  const btn = document.getElementById("downloadTilesBtn");
+  if (!route.loaded) {
+    statusEl.textContent = "Laad eerst de route (tabblad Correctie).";
+    statusEl.className = "gpx-status err";
+    return;
+  }
+  btn.disabled = true;
+  statusEl.className = "gpx-status";
+  statusEl.textContent = "Bezig met downloaden… hou de app open en blijf op wifi.";
+  try {
+    await downloadRouteTiles(route, (done, total) => {
+      statusEl.textContent = `Kaarttegels downloaden: ${done} / ${total}`;
+    });
+    statusEl.textContent = "Kaarttegels van de hele route zijn opgeslagen voor offline gebruik.";
+    statusEl.className = "gpx-status ok";
+  } catch (e) {
+    statusEl.textContent = "Downloaden mislukt. Controleer je internetverbinding en probeer opnieuw.";
+    statusEl.className = "gpx-status err";
+  }
+  btn.disabled = false;
 });
 
 /* ==========================================================================
@@ -933,9 +951,6 @@ function tick() {
   if (document.getElementById("screen-checkpoints").classList.contains("active")) {
     renderCheckpointList();
   }
-  if (document.getElementById("screen-map").classList.contains("active") && mapView) {
-    mapView.draw();
-  }
 }
 
 setInterval(tick, 1000);
@@ -948,7 +963,7 @@ async function boot() {
   populateCorrectionForm();
   applySettingsToUI();
 
-  mapView = new MapView(document.getElementById("routeCanvas"), route, CHECKPOINTS);
+  mapView = new MapView("leafletMap", route, CHECKPOINTS);
 
   await initRoute();
   updateMapReachedSet();

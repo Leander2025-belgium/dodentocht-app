@@ -12,6 +12,7 @@
 <meta name="apple-mobile-web-app-title" content="Dodentocht" />
 <link rel="apple-touch-icon" href="icon-192.png" />
 <link rel="manifest" href="manifest.webmanifest" />
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" />
 <link rel="stylesheet" href="style.css" />
 </head>
 <body>
@@ -99,7 +100,7 @@
   <!-- ---------- KAART ---------- -->
   <section id="screen-map" class="screen">
     <div class="map-wrap">
-      <canvas id="routeCanvas"></canvas>
+      <div id="leafletMap" class="leaflet-map"></div>
       <div class="map-empty" id="mapEmpty">Route nog niet geladen. Kies een GPX-bestand bij Correctie.</div>
 
       <div class="map-toolbar">
@@ -180,6 +181,17 @@
     </div>
 
     <div class="glass card settings-card">
+      <div class="setting-row" style="border-bottom:none; flex-direction:column; align-items:stretch; gap:10px;">
+        <div>
+          <div class="setting-title">Offline kaarttegels</div>
+          <div class="setting-desc">Download de straatkaart van de hele route (~2500 tegels, ongeveer 35-40 MB) zodat de Kaart-tab ook zonder bereik werkt. Doe dit thuis via wifi, vóór de tocht — dit duurt enkele minuten.</div>
+        </div>
+        <button class="pill-btn ghost full" id="downloadTilesBtn" style="margin-bottom:0;">Kaarttegels downloaden</button>
+        <div id="tileDownloadStatus" class="gpx-status"></div>
+      </div>
+    </div>
+
+    <div class="glass card settings-card">
       <button class="pill-btn ghost full" id="exportBtn">Exporteer tochtdata (JSON)</button>
       <button class="pill-btn ghost full danger" id="resetBtn">Tocht resetten</button>
     </div>
@@ -224,6 +236,7 @@
   </div>
 </div>
 
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <script src="checkpoints.js"></script>
 <script src="route.js"></script>
 <script src="map.js"></script>
