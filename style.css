@@ -1017,7 +1017,7 @@ input[type=file] {
   padding: 7px 8px;
   border-radius: 28px;
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(5, 1fr);
   background: rgba(16,18,24,.82);
   border: 1px solid rgba(255,255,255,.12);
   box-shadow:
@@ -1607,4 +1607,12 @@ body.finish-zone .hero-shell::after {
   font-weight: 850;
   background: rgba(74,222,128,.11);
   color: #bff9d0;
+}
+
+.tabbar .tab-btn {
+  min-width: 0;
+}
+
+.tabbar .tab-btn span:last-child {
+  font-size: 10px;
 }

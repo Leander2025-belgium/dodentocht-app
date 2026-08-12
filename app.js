@@ -264,6 +264,7 @@ function afterRouteLoaded() {
 
   renderCheckpointList();
   renderDashboard();
+  initLiveUi();
 }
 
 /* Navigation */
