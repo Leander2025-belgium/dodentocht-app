@@ -43,3 +43,16 @@ Deze versie gebruikt:
 - goud vanaf 95 km
 - groen uitsluitend voor successtatussen / bereikte posten
 - blauwe live locatie op de kaart voor duidelijke GPS-herkenning
+
+
+## V3 Dodentocht-stijl
+
+Extra branding:
+- 100 KM / DODENTOCHT 2026 / 57e editie / Bornem
+- race chips en fase-indicator
+- mijlpaalkaart voor 25 / 50 / 75 / 100 km
+- automatische mijlpaalmeldingen
+- warmere rood-oranje-goud gradients
+- laatste kwart en finishzone krijgen extra goudaccenten
+- extra donkere nachtweergave tussen 00:00 en 06:00
+- checkpointkaarten voelen meer als event/race cards

@@ -551,6 +551,31 @@ function cpPauseEnd(cpId) {
 
 /* Alerts */
 
+
+function checkMilestoneCelebrations() {
+  const milestones = [25, 50, 75, 100];
+
+  milestones.forEach(km => {
+    const key = `milestone_${km}`;
+    if (state.distanceKm >= km && !state.alertsFired[key]) {
+      state.alertsFired[key] = true;
+      saveState();
+
+      const msg =
+        km === 100 ? "100 KM — finish bereikt!" :
+        km === 75 ? "75 KM — laatste kwart." :
+        km === 50 ? "50 KM — helft bereikt." :
+        "25 KM — eerste grote mijlpaal.";
+
+      notify(msg);
+
+      if (navigator.vibrate) {
+        navigator.vibrate(km === 100 ? [120, 80, 120, 80, 180] : [80, 60, 80]);
+      }
+    }
+  });
+}
+
 function checkDistanceAlerts() {
   if (!state.settings.remindersEnabled) return;
 
@@ -624,6 +649,35 @@ function showToast(message) {
 
 /* Status */
 
+
+function getMilestoneInfo(distance) {
+  const marks = [25, 50, 75, 100];
+  const next = marks.find(m => distance < m);
+
+  if (next === undefined) {
+    return { value: 100, text: "Finish bereikt" };
+  }
+
+  const remaining = Math.max(0, next - distance);
+  return {
+    value: next,
+    text: `${remaining.toFixed(1)} km tot deze mijlpaal`
+  };
+}
+
+function getRacePhase(distance) {
+  if (distance >= 95) return "FINISHZONE";
+  if (distance >= 75) return "LAATSTE KWART";
+  if (distance >= 50) return "TWEEDE HELFT";
+  if (distance >= 25) return "RITME";
+  return "START";
+}
+
+function applyNightMode() {
+  const h = new Date().getHours();
+  document.body.classList.toggle("deep-night", h >= 0 && h < 6);
+}
+
 function computeStatus() {
   const walkMs = walkingElapsedMs();
   const elapsedH = walkMs / 3600000;
@@ -694,6 +748,16 @@ function renderDashboard() {
 
   document.body.classList.toggle("deep-zone", distance >= 75 && distance < 95);
   document.body.classList.toggle("finish-zone", distance >= 95);
+  applyNightMode();
+
+  const milestone = getMilestoneInfo(distance);
+  const milestoneValue = document.getElementById("milestoneValue");
+  const milestoneText = document.getElementById("milestoneText");
+  const racePhaseLabel = document.getElementById("racePhaseLabel");
+
+  if (milestoneValue) milestoneValue.textContent = milestone.value;
+  if (milestoneText) milestoneText.textContent = milestone.text;
+  if (racePhaseLabel) racePhaseLabel.textContent = getRacePhase(distance);
   const remaining = Math.max(0, TOTAL_KM - distance);
   const progress = Math.min(100, distance);
 
@@ -1195,6 +1259,7 @@ document.addEventListener("visibilitychange", () => {
 
 function tick() {
   checkCheckpointArrivals();
+  checkMilestoneCelebrations();
   checkDistanceAlerts();
   checkPeriodicReminders();
 
