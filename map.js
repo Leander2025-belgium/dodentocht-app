@@ -74,7 +74,7 @@ class MapView {
         radius: reached ? 6 : 7,
         color: "#090b0f",
         weight: 2,
-        fillColor: reached ? "#64f0b3" : "#ffb84d",
+        fillColor: reached ? "#4ade80" : "#ff8a32",
         fillOpacity: 1
       });
 
@@ -187,7 +187,7 @@ class MapView {
 
     if (walked.length > 1) {
       this.walkedLine = L.polyline(walked, {
-        color: "#64f0b3",
+        color: "#ff5a36",
         weight: 6,
         opacity: 0.95,
         lineCap: "round",
@@ -216,7 +216,7 @@ class MapView {
       radius: 11,
       color: "rgba(255,255,255,.92)",
       weight: 3,
-      fillColor: "#ffb84d",
+      fillColor: "#ffb52e",
       fillOpacity: 1
     }).addTo(this.map);
 
@@ -247,7 +247,7 @@ class MapView {
       const reached = idsSet.has(id);
       marker.setStyle({
         radius: reached ? 6 : 7,
-        fillColor: reached ? "#64f0b3" : "#ffb84d"
+        fillColor: reached ? "#4ade80" : "#ff8a32"
       });
     });
   }

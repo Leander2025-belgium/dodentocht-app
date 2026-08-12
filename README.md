@@ -32,3 +32,14 @@ De code doet bewust GEEN bulk-download van OpenStreetMap-tegels.
 ## Extra
 
 Voor echte volledig offline straatkaarten moet je later een provider/self-hosted tile-oplossing gebruiken die offline gebruik toestaat.
+
+
+## Dodentocht branding
+
+Deze versie gebruikt:
+- bijna zwarte / grafiet achtergrond
+- rood-oranje als hoofdaccent
+- amber/goud richting het laatste kwart
+- goud vanaf 95 km
+- groen uitsluitend voor successtatussen / bereikte posten
+- blauwe live locatie op de kaart voor duidelijke GPS-herkenning

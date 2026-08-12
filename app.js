@@ -668,6 +668,9 @@ function computeStatus() {
 
 function renderDashboard() {
   const distance = Math.max(0, Math.min(TOTAL_KM, state.distanceKm));
+
+  document.body.classList.toggle("deep-zone", distance >= 75 && distance < 95);
+  document.body.classList.toggle("finish-zone", distance >= 95);
   const remaining = Math.max(0, TOTAL_KM - distance);
   const progress = Math.min(100, distance);
 
