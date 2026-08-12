@@ -1168,3 +1168,14 @@ input[type=file] {
     transition-duration: .001ms !important;
   }
 }
+
+.cp-hours {
+  color: #ffbe73;
+  font-weight: 700;
+}
+
+.cp-supplies::before {
+  content: "Bevoorrading · ";
+  color: rgba(246,247,251,.52);
+  font-weight: 700;
+}

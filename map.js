@@ -79,7 +79,7 @@ class MapView {
       });
 
       marker.bindPopup(
-        `<strong>${escapeHtml(cp.name)}</strong><br>${cp.km.toFixed(1)} km`
+        `<strong>${escapeHtml(cp.name)} · ${escapeHtml(cp.location || "")}</strong><br>${cp.km.toFixed(1)} km<br>Open ${cp.opens} · sluit ${cp.closes}`
       );
 
       marker.addTo(this.map);
@@ -221,7 +221,7 @@ class MapView {
     }).addTo(this.map);
 
     this.nextMarker.bindPopup(
-      `<strong>Volgende: ${escapeHtml(next.name)}</strong><br>${next.km.toFixed(1)} km`
+      `<strong>Volgende: ${escapeHtml(next.name)} · ${escapeHtml(next.location || "")}</strong><br>${next.km.toFixed(1)} km<br>Open ${next.opens} · sluit ${next.closes}`
     );
   }
 

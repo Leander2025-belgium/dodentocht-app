@@ -97,6 +97,29 @@ function fmtClock(date) {
   });
 }
 
+function checkpointDateForClock(clock, referenceDate = new Date()) {
+  if (!clock) return null;
+  const [h, m] = clock.split(":").map(Number);
+  const d = new Date(referenceDate);
+  d.setHours(h, m, 0, 0);
+  if (h < 21) d.setDate(d.getDate() + 1);
+  return d;
+}
+
+function formatTimeUntil(date) {
+  if (!date) return null;
+  const diff = date.getTime() - Date.now();
+  const mins = Math.round(Math.abs(diff) / 60000);
+  const h = Math.floor(mins / 60);
+  const m = mins % 60;
+  if (diff >= 0) return h > 0 ? `${h}u ${String(m).padStart(2,"0")}m tot sluiting` : `${m} min tot sluiting`;
+  return h > 0 ? `${h}u ${String(m).padStart(2,"0")}m gesloten` : `${m} min gesloten`;
+}
+
+function checkpointDisplayName(cp) {
+  return cp?.location ? `${cp.name} · ${cp.location}` : (cp?.name || "—");
+}
+
 function fmtHM(ms) {
   const min = Math.max(0, Math.floor(ms / 60000));
   return `${Math.floor(min / 60)}:${String(min % 60).padStart(2, "0")}`;
@@ -729,30 +752,37 @@ function renderDashboard() {
     const legDone = Math.max(0, distance - prevKm);
     const legProgress = Math.min(100, legDone / legLength * 100);
 
-    document.getElementById("nextCpName").textContent = next.name;
+    document.getElementById("nextCpName").textContent = checkpointDisplayName(next);
     document.getElementById("nextCpDist").textContent = `${toGo.toFixed(1)} km`;
     document.getElementById("nextCpProgress").style.width = `${legProgress}%`;
 
-    let nextEtaText = `km ${next.km.toFixed(1)} · pauze ${next.rest} min`;
+    let nextEtaText = `km ${next.km.toFixed(1)} · open ${next.opens} · sluit ${next.closes}`;
 
     if (avgSpeed && avgSpeed > .5) {
       const nextEta = new Date(Date.now() + toGo / avgSpeed * 3600000);
-      nextEtaText += ` · ± ${fmtClock(nextEta)}`;
+      nextEtaText += ` · aankomst ± ${fmtClock(nextEta)}`;
     }
+
+    const closeDate = state.startTime ? checkpointDateForClock(next.closes, new Date(state.startTime)) : null;
+    const untilClose = closeDate ? formatTimeUntil(closeDate) : null;
+    if (untilClose) nextEtaText += ` · ${untilClose}`;
 
     document.getElementById("nextCpMeta").textContent = nextEtaText;
 
-    document.getElementById("mapNextName").textContent = next.name;
+    document.getElementById("mapNextName").textContent = checkpointDisplayName(next);
     document.getElementById("mapNextDistance").textContent = `${toGo.toFixed(1)} km`;
 
     const walkMinutes = avgSpeed && avgSpeed > .5
       ? Math.round(toGo / avgSpeed * 60)
       : null;
 
+    const closeDateMap = state.startTime ? checkpointDateForClock(next.closes, new Date(state.startTime)) : null;
+    const untilCloseMap = closeDateMap ? formatTimeUntil(closeDateMap) : null;
+
     document.getElementById("mapNextMeta").textContent =
       walkMinutes
-        ? `ongeveer ${walkMinutes} min · km ${next.km.toFixed(1)}`
-        : `km ${next.km.toFixed(1)}`;
+        ? `± ${walkMinutes} min · sluit ${next.closes}${untilCloseMap ? ` · ${untilCloseMap}` : ""}`
+        : `sluit ${next.closes}${untilCloseMap ? ` · ${untilCloseMap}` : ""}`;
   } else {
     document.getElementById("nextCpName").textContent = "Finish";
     document.getElementById("nextCpDist").textContent = "🏁";
@@ -817,13 +847,18 @@ function renderCheckpointList() {
 
     card.innerHTML = `
       <div class="cp-top">
-        <div class="cp-name">${escapeHtml(cp.name)}</div>
+        <div class="cp-name">${escapeHtml(checkpointDisplayName(cp))}</div>
         <div class="cp-km">${cp.km.toFixed(1)} km</div>
       </div>
 
       <div class="cp-row">
         <span>${arrival}</span>
         <span>${cp.km > state.distanceKm ? `${toGo.toFixed(1)} km` : "✓"}</span>
+      </div>
+
+      <div class="cp-row cp-hours">
+        <span>Open ${cp.opens}</span>
+        <span>Sluit ${cp.closes}</span>
       </div>
 
       ${cp.supplies.length
