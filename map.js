@@ -1,213 +1,263 @@
-/**
- * map.js
- * Echte kaart (straten, gebouwen, ...) op basis van Leaflet + OpenStreetMap-
- * tegels, met de route, controleposten en live positie erop getekend.
- *
- * Kaarttegels komen normaal via internet. Om de kaart ook tijdens de tocht
- * zonder bereik te laten werken, kan de gebruiker vooraf (thuis, via wifi)
- * alle tegels langs de route downloaden — zie downloadRouteTiles(). Die
- * tegels worden bewaard in de Cache Storage van de browser onder
- * TILE_CACHE_NAME, en sw.js dient ze nadien cache-first terug, ook offline.
- */
-
 "use strict";
 
-const TILE_CACHE_NAME = "doto2026-tiles-v1";
-const TILE_URL_TEMPLATE = "https://tile.openstreetmap.org/{z}/{x}/{y}.png";
-const OSM_ATTRIBUTION = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>-bijdragers';
+const TILE_URL = "https://tile.openstreetmap.org/{z}/{x}/{y}.png";
+const OSM_ATTRIBUTION =
+  '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>';
 
 class MapView {
   constructor(elId, route, checkpoints) {
     this.route = route;
     this.checkpoints = checkpoints;
+
     this.userLatLon = null;
-    this.reachedIds = new Set();
+    this.userAccuracyM = null;
+    this.routeProjection = null;
+
     this.followMode = false;
+    this.reachedIds = new Set();
+
+    this.routeLine = null;
+    this.walkedLine = null;
+    this.userMarker = null;
+    this.accuracyCircle = null;
+    this.nextMarker = null;
+    this.cpMarkers = new Map();
 
     this.map = L.map(elId, {
       zoomControl: false,
       attributionControl: true,
-    }).setView([51.09, 4.24], 12); // voorlopig centrum, wordt overschreven zodra de route geladen is
+      preferCanvas: true
+    }).setView([51.09, 4.24], 12);
 
-    L.tileLayer(TILE_URL_TEMPLATE, {
-      maxZoom: 18,
+    L.tileLayer(TILE_URL, {
       minZoom: 9,
+      maxZoom: 19,
       attribution: OSM_ATTRIBUTION,
+      updateWhenIdle: true,
+      keepBuffer: 3
     }).addTo(this.map);
 
-    L.control.zoom({ position: "bottomright" }).addTo(this.map);
-
-    this.routeLine = null;
-    this.walkedLine = null;
-    this.cpMarkers = new Map(); // id -> marker
-    this.userMarker = null;
-    this.userHalo = null;
+    this.map.on("dragstart zoomstart", () => {
+      if (this.followMode) {
+        this.followMode = false;
+        document.getElementById("mapFollowBtn")?.classList.remove("active");
+      }
+    });
   }
-
-  /* ---------------- Route & controleposten tekenen ---------------- */
 
   renderRoute() {
     if (!this.route.loaded) return;
 
-    const latlngs = this.route.points.map((p) => [p.lat, p.lon]);
+    const latlngs = this.route.points.map(p => [p.lat, p.lon]);
 
     if (this.routeLine) this.map.removeLayer(this.routeLine);
+
     this.routeLine = L.polyline(latlngs, {
-      color: "#f5f6f7",
-      weight: 4,
-      opacity: 0.65,
+      color: "#d9dde6",
+      weight: 5,
+      opacity: 0.48,
+      lineCap: "round",
+      lineJoin: "round"
     }).addTo(this.map);
 
-    this.checkpoints.forEach((cp) => {
-      if (cp.km === 0 || cp.km === 100) return;
+    this.cpMarkers.forEach(marker => this.map.removeLayer(marker));
+    this.cpMarkers.clear();
+
+    this.checkpoints.forEach(cp => {
+      if (cp.km <= 0 || cp.km >= 100) return;
+
       const pt = this.route.pointAtDistance(cp.km);
       if (!pt) return;
+
+      const reached = this.reachedIds.has(cp.id);
       const marker = L.circleMarker([pt.lat, pt.lon], {
-        radius: 7,
-        color: "#0a0a0e",
+        radius: reached ? 6 : 7,
+        color: "#090b0f",
         weight: 2,
-        fillColor: "#f5b942",
-        fillOpacity: 1,
-      }).bindPopup(`<b>${cp.name}</b><br>${cp.km} km`);
+        fillColor: reached ? "#64f0b3" : "#ffb84d",
+        fillOpacity: 1
+      });
+
+      marker.bindPopup(
+        `<strong>${escapeHtml(cp.name)}</strong><br>${cp.km.toFixed(1)} km`
+      );
+
       marker.addTo(this.map);
       this.cpMarkers.set(cp.id, marker);
     });
 
-    this.map.fitBounds(this.routeLine.getBounds(), { padding: [30, 30] });
     document.getElementById("mapEmpty").style.display = "none";
+    this.fitFullRoute();
+    this.updateProgress(0, null);
   }
 
-  /** Kaart terug op de volledige route centreren. */
-  resetView() {
+  fitFullRoute() {
     this.followMode = false;
+    document.getElementById("mapFollowBtn")?.classList.remove("active");
+
     if (this.routeLine) {
-      this.map.fitBounds(this.routeLine.getBounds(), { padding: [30, 30] });
+      this.map.fitBounds(this.routeLine.getBounds(), {
+        paddingTopLeft: [24, 30],
+        paddingBottomRight: [24, 160],
+        animate: true
+      });
     }
   }
 
-  /** Kaart moet opnieuw de juiste afmetingen kennen nadat het tabblad zichtbaar werd. */
   invalidateSize() {
-    this.map.invalidateSize();
+    this.map.invalidateSize({ animate: false });
   }
 
-  /* ---------------- Live positie & voortgang ---------------- */
+  setFollowMode(enabled) {
+    this.followMode = !!enabled;
+    document.getElementById("mapFollowBtn")?.classList.toggle("active", this.followMode);
 
-  setUserPosition(lat, lon) {
+    if (this.followMode && this.userLatLon) {
+      this._followUser(true);
+    }
+  }
+
+  setUserPosition(lat, lon, accuracyM, projection) {
     this.userLatLon = { lat, lon };
+    this.userAccuracyM = accuracyM || null;
+    this.routeProjection = projection || null;
+
+    const latlng = [lat, lon];
 
     if (!this.userMarker) {
-      this.userHalo = L.circleMarker([lat, lon], {
-        radius: 14, color: "transparent", fillColor: "#4ade9a", fillOpacity: 0.22,
+      const icon = L.divIcon({
+        className: "",
+        html: '<div class="user-location-marker"></div>',
+        iconSize: [19, 19],
+        iconAnchor: [9.5, 9.5]
+      });
+
+      this.userMarker = L.marker(latlng, {
+        icon,
+        interactive: false,
+        zIndexOffset: 1000
       }).addTo(this.map);
-      this.userMarker = L.circleMarker([lat, lon], {
-        radius: 7, color: "#06140d", weight: 2, fillColor: "#4ade9a", fillOpacity: 1,
+
+      this.accuracyCircle = L.circle(latlng, {
+        radius: Math.max(5, accuracyM || 10),
+        color: "#60a9ff",
+        weight: 1,
+        opacity: 0.24,
+        fillColor: "#60a9ff",
+        fillOpacity: 0.08,
+        interactive: false
       }).addTo(this.map);
     } else {
-      this.userHalo.setLatLng([lat, lon]);
-      this.userMarker.setLatLng([lat, lon]);
+      this.userMarker.setLatLng(latlng);
+      this.accuracyCircle.setLatLng(latlng);
+      this.accuracyCircle.setRadius(Math.max(5, accuracyM || 10));
     }
 
-    this._updateWalkedLine();
+    if (projection) {
+      this.updateProgress(projection.km, projection);
+    }
 
-    if (this.followMode) this.map.panTo([lat, lon], { animate: true });
+    if (this.followMode) {
+      this._followUser(false);
+    }
   }
 
-  _updateWalkedLine() {
-    if (!this.route.loaded || !this.userLatLon) return;
-    const proj = this.route.projectDistanceKm(this.userLatLon.lat, this.userLatLon.lon, null);
-    if (!proj) return;
-    const walked = this.route.points.slice(0, proj.index + 1).map((p) => [p.lat, p.lon]);
+  _followUser(forceZoom) {
+    if (!this.userLatLon) return;
 
-    if (this.walkedLine) this.map.removeLayer(this.walkedLine);
-    this.walkedLine = L.polyline(walked, { color: "#4ade9a", weight: 5, opacity: 0.9 }).addTo(this.map);
+    const target = [this.userLatLon.lat, this.userLatLon.lon];
+    const zoom = forceZoom ? Math.max(this.map.getZoom(), 16) : this.map.getZoom();
+
+    if (forceZoom) {
+      this.map.setView(target, zoom, { animate: true });
+    } else {
+      this.map.panTo(target, { animate: true, duration: 0.35 });
+    }
+  }
+
+  updateProgress(distanceKm, projection = null) {
+    if (!this.route.loaded) return;
+
+    const walked = this.route.sliceToDistance(distanceKm);
+
+    if (this.walkedLine) {
+      this.map.removeLayer(this.walkedLine);
+      this.walkedLine = null;
+    }
+
+    if (walked.length > 1) {
+      this.walkedLine = L.polyline(walked, {
+        color: "#64f0b3",
+        weight: 6,
+        opacity: 0.95,
+        lineCap: "round",
+        lineJoin: "round"
+      }).addTo(this.map);
+    }
+
+    this._updateNextCheckpointMarker(distanceKm);
+    this._updateOffRouteUI(projection);
+  }
+
+  _updateNextCheckpointMarker(distanceKm) {
+    const next = this.checkpoints.find(cp => cp.km > distanceKm + 0.02);
+
+    if (this.nextMarker) {
+      this.map.removeLayer(this.nextMarker);
+      this.nextMarker = null;
+    }
+
+    if (!next || next.km >= 100) return;
+
+    const pt = this.route.pointAtDistance(next.km);
+    if (!pt) return;
+
+    this.nextMarker = L.circleMarker([pt.lat, pt.lon], {
+      radius: 11,
+      color: "rgba(255,255,255,.92)",
+      weight: 3,
+      fillColor: "#ffb84d",
+      fillOpacity: 1
+    }).addTo(this.map);
+
+    this.nextMarker.bindPopup(
+      `<strong>Volgende: ${escapeHtml(next.name)}</strong><br>${next.km.toFixed(1)} km`
+    );
+  }
+
+  _updateOffRouteUI(projection) {
+    const banner = document.getElementById("offRouteBanner");
+    const text = document.getElementById("offRouteText");
+    if (!banner || !text) return;
+
+    const offset = projection?.offsetM ?? 0;
+
+    if (offset > 70) {
+      banner.hidden = false;
+      text.textContent = `Je bent ongeveer ${Math.round(offset)} m van het parcours.`;
+    } else {
+      banner.hidden = true;
+    }
   }
 
   setReached(idsSet) {
     this.reachedIds = idsSet;
+
     this.cpMarkers.forEach((marker, id) => {
       const reached = idsSet.has(id);
-      marker.setStyle({ fillColor: reached ? "#4ade9a" : "#f5b942" });
+      marker.setStyle({
+        radius: reached ? 6 : 7,
+        fillColor: reached ? "#64f0b3" : "#ffb84d"
+      });
     });
   }
 }
 
-/* ==========================================================================
-   OFFLINE TEGELS DOWNLOADEN
-   Berekent alle tegels die de bounding box van de route overlappen voor een
-   reeks zoomniveaus, en haalt ze één voor één op zodat ze in de Cache
-   Storage terechtkomen. Nadien dient sw.js dezelfde tegels cache-first,
-   ook zonder internet.
-   ========================================================================== */
-
-function lonToTileX(lon, z) {
-  return Math.floor(((lon + 180) / 360) * Math.pow(2, z));
-}
-function latToTileY(lat, z) {
-  const rad = (lat * Math.PI) / 180;
-  return Math.floor(
-    ((1 - Math.log(Math.tan(rad) + 1 / Math.cos(rad)) / Math.PI) / 2) * Math.pow(2, z)
-  );
-}
-
-function tilesForBounds(bounds, zoom, bufferTiles = 1) {
-  const xMin = lonToTileX(bounds.minLon, zoom) - bufferTiles;
-  const xMax = lonToTileX(bounds.maxLon, zoom) + bufferTiles;
-  // let op: bij hogere breedtegraad geeft een hogere lat een lagere tileY
-  const yMin = latToTileY(bounds.maxLat, zoom) - bufferTiles;
-  const yMax = latToTileY(bounds.minLat, zoom) + bufferTiles;
-
-  const tiles = [];
-  for (let x = xMin; x <= xMax; x++) {
-    for (let y = yMin; y <= yMax; y++) {
-      tiles.push({ z: zoom, x, y });
-    }
-  }
-  return tiles;
-}
-
-/**
- * Download alle tegels die de route overlappen voor zoom 12 t/m 16
- * (overzicht t/m straatniveau) en bewaart ze in de Cache Storage.
- * Roept onProgress(done, total) aan tijdens het lopen.
- */
-async function downloadRouteTiles(route, onProgress) {
-  if (!route.loaded) throw new Error("Route nog niet geladen");
-
-  let minLat = Infinity, maxLat = -Infinity, minLon = Infinity, maxLon = -Infinity;
-  route.points.forEach((p) => {
-    if (p.lat < minLat) minLat = p.lat;
-    if (p.lat > maxLat) maxLat = p.lat;
-    if (p.lon < minLon) minLon = p.lon;
-    if (p.lon > maxLon) maxLon = p.lon;
-  });
-  const bounds = { minLat, maxLat, minLon, maxLon };
-
-  const zoomLevels = [12, 13, 14, 15, 16];
-  let allTiles = [];
-  zoomLevels.forEach((z) => {
-    allTiles = allTiles.concat(tilesForBounds(bounds, z, 1));
-  });
-
-  const cache = await caches.open(TILE_CACHE_NAME);
-  const total = allTiles.length;
-  let done = 0;
-
-  for (const t of allTiles) {
-    const url = `https://tile.openstreetmap.org/${t.z}/${t.x}/${t.y}.png`;
-    try {
-      const existing = await cache.match(url);
-      if (!existing) {
-        const res = await fetch(url, { mode: "cors" });
-        if (res && res.ok) await cache.put(url, res.clone());
-      }
-    } catch (e) {
-      // enkele mislukte tegels (bv. tijdelijk geen netwerk) mogen de rest niet blokkeren
-    }
-    done++;
-    if (onProgress) onProgress(done, total);
-    // korte pauze tussen aanvragen: respectvol tegenover de gratis OSM-tegelserver
-    await new Promise((r) => setTimeout(r, 40));
-  }
-
-  return { total, done };
+function escapeHtml(value) {
+  return String(value)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
 }

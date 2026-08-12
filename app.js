@@ -1,55 +1,56 @@
-/**
- * app.js
- * Kernlogica van de Dodentocht 2026 Companion.
- * Vanilla JS, geen frameworks. Alles werkt offline na de eerste load.
- */
-
 "use strict";
 
-const STORAGE_KEY = "doto2026_state_v1";
+const STORAGE_KEY = "doto2026_state_v2";
+const IDB_NAME = "doto2026";
+const IDB_STORE = "files";
 const TOTAL_KM = 100;
 const DEADLINE_HOURS = 24;
 
 const route = new Route();
 let mapView = null;
+let watchId = null;
+let wakeLockSentinel = null;
+let saveTimer = null;
+let pendingBackwardFixes = 0;
+let pendingForwardJump = null;
+let currentStatusLevel = "green";
 
-/* ==========================================================================
-   STATE
-   ========================================================================== */
+const MIN_ACCEPT_ACCURACY_M = 80;
+const BACKWARD_TOLERANCE_M = 30;
+const FORWARD_JUMP_LIMIT_M = 450;
+const OFF_ROUTE_WARN_M = 70;
 
 function defaultState() {
   return {
-    startTime: null,          // ISO string, null = nog niet gestart
+    startTime: null,
     distanceKm: 0,
-    maxDistanceKm: 0,         // hoogst bevestigde afstand (voorkomt terugspringen)
-    lastFixTime: null,        // ISO string van laatste geldige GPS-fix
-    gpsIndexHint: null,       // index in route.points, voor snelle projectie
+    maxDistanceKm: 0,
+    lastFixTime: null,
+    lastRawPosition: null,
+    gpsIndexHint: null,
 
     paused: false,
-    pauseStart: null,         // ISO string
+    pauseStart: null,
     totalPauseMs: 0,
-    autoPauseCandidateSince: null,
 
-    speedSamples: [],         // [{t, km}] rollend venster voor tempo/snelheid
-
-    checkpointLog: {},        // id -> { arrival: iso, pauseStartedAt: iso|null, pauseMs: number, departed: iso|null }
+    speedSamples: [],
+    checkpointLog: {},
 
     settings: {
       powerSaving: false,
       remindersEnabled: false,
       notificationsEnabled: false,
-      wakeLock: false,
+      wakeLock: false
     },
 
     reminders: {
-      lastDrinkAtMinute: 0,   // wandeltijd in minuten bij laatste drinkherinnering
+      lastDrinkAtMinute: 0,
       lastEatAtMinute: 0,
-      lastFootCheckKm: 0,
+      lastFootCheckKm: 0
     },
 
-    alertsFired: {},          // km-string -> true
-
-    checklistHistory: [],     // [{t, answers, severe}]
+    alertsFired: {},
+    checklistHistory: []
   };
 }
 
@@ -59,38 +60,87 @@ function loadState() {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return defaultState();
+
     const parsed = JSON.parse(raw);
-    return Object.assign(defaultState(), parsed);
-  } catch (e) {
-    console.warn("Kon opgeslagen status niet lezen, start opnieuw.", e);
+    const merged = {
+      ...defaultState(),
+      ...parsed,
+      settings: { ...defaultState().settings, ...(parsed.settings || {}) },
+      reminders: { ...defaultState().reminders, ...(parsed.reminders || {}) }
+    };
+
+    return merged;
+  } catch {
     return defaultState();
   }
 }
 
-let saveTimer = null;
 function saveState() {
   clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-    } catch (e) {
-      console.warn("Opslaan mislukt", e);
+    } catch (err) {
+      console.warn("Opslaan mislukt", err);
     }
-  }, 150);
+  }, 100);
 }
 
-/* ==========================================================================
-   INDEXEDDB — opslag voor de (mogelijk grote) GPX-route, zodat de app
-   volledig offline blijft werken na de eerste keer laden.
-   ========================================================================== */
+function nowIso() {
+  return new Date().toISOString();
+}
 
-const IDB_NAME = "doto2026";
-const IDB_STORE = "files";
+function fmtClock(date) {
+  return date.toLocaleTimeString("nl-BE", {
+    hour: "2-digit",
+    minute: "2-digit"
+  });
+}
+
+function fmtHM(ms) {
+  const min = Math.max(0, Math.floor(ms / 60000));
+  return `${Math.floor(min / 60)}:${String(min % 60).padStart(2, "0")}`;
+}
+
+function walkingElapsedMs() {
+  if (!state.startTime) return 0;
+
+  let total = Date.now() - new Date(state.startTime).getTime();
+  let pause = state.totalPauseMs;
+
+  if (state.paused && state.pauseStart) {
+    pause += Date.now() - new Date(state.pauseStart).getTime();
+  }
+
+  return Math.max(0, total - pause);
+}
+
+function totalElapsedMs() {
+  if (!state.startTime) return 0;
+  return Math.max(0, Date.now() - new Date(state.startTime).getTime());
+}
+
+function scheduleHoursForKm(km) {
+  const earlySpeed = PACE_PLAN?.early?.targetKmh || 4.6;
+  if (km <= 50) return km / earlySpeed;
+
+  const first50 = 50 / earlySpeed;
+  const secondHalfSpeed = 50 / Math.max(1, DEADLINE_HOURS - first50);
+  return first50 + (km - 50) / secondHalfSpeed;
+}
+
+/* IndexedDB */
 
 function idbOpen() {
   return new Promise((resolve, reject) => {
     const req = indexedDB.open(IDB_NAME, 1);
-    req.onupgradeneeded = () => req.result.createObjectStore(IDB_STORE);
+
+    req.onupgradeneeded = () => {
+      if (!req.result.objectStoreNames.contains(IDB_STORE)) {
+        req.result.createObjectStore(IDB_STORE);
+      }
+    };
+
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error);
   });
@@ -98,6 +148,7 @@ function idbOpen() {
 
 async function idbGet(key) {
   const db = await idbOpen();
+
   return new Promise((resolve, reject) => {
     const tx = db.transaction(IDB_STORE, "readonly");
     const req = tx.objectStore(IDB_STORE).get(key);
@@ -108,6 +159,7 @@ async function idbGet(key) {
 
 async function idbSet(key, value) {
   const db = await idbOpen();
+
   return new Promise((resolve, reject) => {
     const tx = db.transaction(IDB_STORE, "readwrite");
     tx.objectStore(IDB_STORE).put(value, key);
@@ -116,39 +168,35 @@ async function idbSet(key, value) {
   });
 }
 
-/* ==========================================================================
-   ROUTE LADEN
-   ========================================================================== */
+/* Route */
 
 async function initRoute() {
-  // 1) Probeer een eerder lokaal opgeslagen GPX (werkt volledig offline).
   try {
     const cached = await idbGet("route_gpx_text");
     if (cached) {
       route.loadFromGpxText(cached);
-      setGpxStatus(`Route geladen uit lokale opslag (${route.totalKm.toFixed(1)} km).`, "ok");
+      setGpxStatus(`Route geladen uit lokale opslag · ${route.totalKm.toFixed(1)} km`, "ok");
       afterRouteLoaded();
       return;
     }
-  } catch (e) { /* IndexedDB niet beschikbaar of leeg, ga verder */ }
+  } catch {}
 
-  // 2) Probeer het meegeleverde route.gpx bestand naast de app te laden.
   try {
     const res = await fetch("route.gpx", { cache: "force-cache" });
+
     if (res.ok) {
       const text = await res.text();
       route.loadFromGpxText(text);
-      await idbSet("route_gpx_text", text);
-      setGpxStatus(`Route geladen (${route.totalKm.toFixed(1)} km).`, "ok");
+
+      try { await idbSet("route_gpx_text", text); } catch {}
+
+      setGpxStatus(`route.gpx geladen · ${route.totalKm.toFixed(1)} km`, "ok");
       afterRouteLoaded();
       return;
     }
-  } catch (e) { /* geen netwerk of bestand ontbreekt, ga verder */ }
+  } catch {}
 
-  setGpxStatus(
-    "Geen route.gpx gevonden. Kies hieronder (of op het tabblad Correctie) het officiële GPX-bestand van de organisatie.",
-    "err"
-  );
+  setGpxStatus("Geen route.gpx gevonden. Kies hieronder handmatig een GPX-bestand.", "err");
 }
 
 async function handleGpxFile(file) {
@@ -156,107 +204,87 @@ async function handleGpxFile(file) {
     const text = await file.text();
     route.loadFromGpxText(text);
     await idbSet("route_gpx_text", text);
-    setGpxStatus(`Route geladen uit bestand (${route.totalKm.toFixed(1)} km).`, "ok");
+    setGpxStatus(`GPX geladen · ${route.totalKm.toFixed(1)} km`, "ok");
     afterRouteLoaded();
-  } catch (e) {
-    setGpxStatus("Kon dit bestand niet lezen als GPX-route.", "err");
+    showToast("Route succesvol geladen.");
+  } catch (err) {
+    console.warn(err);
+    setGpxStatus("Dit bestand kon niet als GPX-route worden gelezen.", "err");
   }
 }
 
-function setGpxStatus(msg, kind) {
+function setGpxStatus(text, type = "") {
   const el = document.getElementById("gpxStatus");
   if (!el) return;
-  el.textContent = msg;
-  el.className = "gpx-status" + (kind ? " " + kind : "");
+
+  el.textContent = text;
+  el.className = `inline-status ${type}`.trim();
 }
 
 function afterRouteLoaded() {
+  if (mapView) {
+    mapView.renderRoute();
+    mapView.setReached(new Set(Object.keys(state.checkpointLog).map(Number)));
+    mapView.updateProgress(state.distanceKm, null);
+  }
+
   renderCheckpointList();
   renderDashboard();
-  if (mapView) mapView.renderRoute();
 }
 
-/* ==========================================================================
-   NAVIGATIE TUSSEN SCHERMEN
-   ========================================================================== */
+/* Navigation */
 
 function showScreen(name) {
-  document.querySelectorAll(".screen").forEach((s) => s.classList.remove("active"));
-  document.getElementById("screen-" + name).classList.add("active");
-  document.querySelectorAll(".tab-btn").forEach((b) => {
-    b.classList.toggle("active", b.dataset.screen === name);
+  document.querySelectorAll(".screen").forEach(screen => {
+    screen.classList.toggle("active", screen.id === `screen-${name}`);
   });
+
+  document.querySelectorAll(".tab-btn").forEach(btn => {
+    btn.classList.toggle("active", btn.dataset.screen === name);
+  });
+
   if (name === "checkpoints") renderCheckpointList();
-  if (name === "correction") populateCorrectionForm();
+  if (name === "more") populateCorrectionForm();
+
   if (name === "map" && mapView) {
-    // de kaart-container had tot nu toe display:none, dus pas nu de echte
-    // afmetingen kennen (anders toont Leaflet grijze/lege vakken)
-    requestAnimationFrame(() => mapView.invalidateSize());
+    requestAnimationFrame(() => {
+      mapView.invalidateSize();
+      if (mapView.followMode && mapView.userLatLon) {
+        mapView.setFollowMode(true);
+      }
+    });
   }
 }
 
-document.querySelectorAll(".tab-btn").forEach((btn) => {
-  btn.addEventListener("click", () => showScreen(btn.dataset.screen));
-});
-
-/* ==========================================================================
-   TIJD- EN AFSTANDSHULPFUNCTIES
-   ========================================================================== */
-
-function nowIso() { return new Date().toISOString(); }
-
-/** Wandeltijd (excl. pauzes) in milliseconden sinds start. */
-function walkingElapsedMs() {
-  if (!state.startTime) return 0;
-  let elapsed = Date.now() - new Date(state.startTime).getTime();
-  let pauseMs = state.totalPauseMs;
-  if (state.paused && state.pauseStart) {
-    pauseMs += Date.now() - new Date(state.pauseStart).getTime();
-  }
-  return Math.max(0, elapsed - pauseMs);
-}
-
-function totalElapsedMs() {
-  if (!state.startTime) return 0;
-  return Math.max(0, Date.now() - new Date(state.startTime).getTime());
-}
-
-function fmtHM(ms) {
-  const totalMin = Math.floor(ms / 60000);
-  const h = Math.floor(totalMin / 60);
-  const m = totalMin % 60;
-  return `${h}:${String(m).padStart(2, "0")}`;
-}
-
-function fmtClock(date) {
-  return date.toLocaleTimeString("nl-BE", { hour: "2-digit", minute: "2-digit" });
-}
-
-/** Persoonlijk schema: verwachte wandeltijd (uren) om een gegeven km te bereiken. */
-function scheduleHoursForKm(km) {
-  if (km <= 50) return km / PACE_PLAN.early.targetKmh;
-  const t50 = 50 / PACE_PLAN.early.targetKmh;
-  const phase2Speed = 50 / (DEADLINE_HOURS - t50); // resterende 50 km in resterende tijd tot 24u
-  return t50 + (km - 50) / phase2Speed;
-}
-
-/* ==========================================================================
-   GPS
-   ========================================================================== */
-
-let watchId = null;
+/* GPS */
 
 function startGps() {
   if (!("geolocation" in navigator)) {
-    showToast("Dit toestel ondersteunt geen GPS-locatie.");
+    showToast("GPS wordt niet ondersteund op dit toestel.");
     return;
   }
+
   stopGps();
-  const opts = state.settings.powerSaving
-    ? { enableHighAccuracy: false, maximumAge: 15000, timeout: 20000 }
-    : { enableHighAccuracy: true, maximumAge: 3000, timeout: 15000 };
-  watchId = navigator.geolocation.watchPosition(onGpsFix, onGpsError, opts);
-  setStatusPill("gps-active");
+
+  const options = state.settings.powerSaving
+    ? {
+        enableHighAccuracy: false,
+        maximumAge: 12000,
+        timeout: 20000
+      }
+    : {
+        enableHighAccuracy: true,
+        maximumAge: 2000,
+        timeout: 15000
+      };
+
+  watchId = navigator.geolocation.watchPosition(
+    onGpsFix,
+    onGpsError,
+    options
+  );
+
+  setGpsStatus("gps-active");
 }
 
 function stopGps() {
@@ -267,186 +295,220 @@ function stopGps() {
 }
 
 function recalibrateGps() {
-  // Herstart de watch en laat de projectie opnieuw een volledige scan doen
-  // in plaats van rond een oud hint-punt te blijven zoeken.
   state.gpsIndexHint = null;
+  pendingBackwardFixes = 0;
+  pendingForwardJump = null;
   startGps();
   showToast("GPS wordt herkalibreerd…");
 }
 
-const MIN_ACCEPT_ACCURACY_M = 60; // negeer fixes die te onnauwkeurig zijn
-const BACKWARD_TOLERANCE_M = 20;  // kleine ruis naar achter wordt genegeerd
-const JUMP_REJECT_M = 300;        // sprong groter dan dit in één fix wordt genegeerd (tenzij bevestigd)
-
-let pendingBackStreak = 0;
-
 function onGpsFix(pos) {
-  if (!route.loaded) return; // nog geen route om tegen te projecteren
+  const { latitude, longitude, accuracy } = pos.coords;
 
-  const { latitude, longitude, accuracy, speed } = pos.coords;
-  if (accuracy && accuracy > MIN_ACCEPT_ACCURACY_M) return; // te onnauwkeurig, negeer
+  state.lastRawPosition = {
+    lat: latitude,
+    lon: longitude,
+    accuracy: accuracy || null,
+    t: Date.now()
+  };
 
-  const proj = route.projectDistanceKm(latitude, longitude, state.gpsIndexHint);
-  if (!proj) return;
+  if (!route.loaded) {
+    if (mapView) mapView.setUserPosition(latitude, longitude, accuracy || 15, null);
+    return;
+  }
 
-  const currentMaxM = state.maxDistanceKm * 1000;
-  const newM = proj.km * 1000;
-  const deltaM = newM - currentMaxM;
+  if (accuracy && accuracy > MIN_ACCEPT_ACCURACY_M) {
+    setGpsStatus("gps-weak");
+    return;
+  }
 
-  if (deltaM >= -BACKWARD_TOLERANCE_M && deltaM <= JUMP_REJECT_M) {
-    // normale voorwaartse (of licht ruisende) update: accepteren
-    applyConfirmedDistance(Math.max(state.distanceKm, proj.km), proj.index);
-    pendingBackStreak = 0;
+  const projection = route.projectDistanceKm(
+    latitude,
+    longitude,
+    state.gpsIndexHint
+  );
+
+  if (!projection) return;
+
+  const previousM = state.distanceKm * 1000;
+  const candidateM = projection.km * 1000;
+  const deltaM = candidateM - previousM;
+
+  let accept = false;
+
+  if (deltaM >= -BACKWARD_TOLERANCE_M && deltaM <= FORWARD_JUMP_LIMIT_M) {
+    accept = true;
+    pendingBackwardFixes = 0;
+    pendingForwardJump = null;
   } else if (deltaM < -BACKWARD_TOLERANCE_M) {
-    // mogelijke terugloop (bv. rond een obstakel): pas na herhaalde bevestiging accepteren
-    pendingBackStreak++;
-    if (pendingBackStreak >= 3) {
-      applyConfirmedDistance(proj.km, proj.index);
-      pendingBackStreak = 0;
+    pendingBackwardFixes += 1;
+    if (pendingBackwardFixes >= 3) {
+      accept = true;
+      pendingBackwardFixes = 0;
     }
-  } else if (deltaM > JUMP_REJECT_M) {
-    // te grote sprong in één keer: negeer als eenmalige uitschieter
-    pendingBackStreak = 0;
+  } else if (deltaM > FORWARD_JUMP_LIMIT_M) {
+    if (
+      pendingForwardJump &&
+      Math.abs(pendingForwardJump.km - projection.km) < 0.08
+    ) {
+      accept = true;
+      pendingForwardJump = null;
+    } else {
+      pendingForwardJump = {
+        km: projection.km,
+        t: Date.now()
+      };
+    }
+  }
+
+  if (accept) {
+    applyConfirmedProjection(projection);
+  }
+
+  if (mapView) {
+    mapView.setUserPosition(
+      latitude,
+      longitude,
+      accuracy || 15,
+      projection
+    );
   }
 
   trackSpeedSample(state.distanceKm);
-  autoPauseDetection();
-
-  if (mapView) mapView.setUserPosition(latitude, longitude);
+  setGpsStatus("gps-active");
 }
 
-function applyConfirmedDistance(km, index) {
-  state.distanceKm = Math.max(0, Math.min(TOTAL_KM, km));
-  state.maxDistanceKm = Math.max(state.maxDistanceKm, state.distanceKm);
-  state.gpsIndexHint = index;
+function applyConfirmedProjection(projection) {
+  const candidate = Math.max(0, Math.min(TOTAL_KM, projection.km));
+
+  state.distanceKm = candidate;
+  state.maxDistanceKm = Math.max(state.maxDistanceKm, candidate);
+  state.gpsIndexHint = projection.index;
   state.lastFixTime = nowIso();
+
   saveState();
 }
 
 function onGpsError(err) {
-  // Stil falen naar de UI toe; de statuspil toont "geen GPS-signaal".
-  setStatusPill("gps-lost");
+  console.warn("GPS fout", err);
+  setGpsStatus("gps-lost");
+}
+
+function setGpsStatus(mode) {
+  const label = document.getElementById("statusLabel");
+  const dot = document.getElementById("statusDot");
+
+  if (mode === "gps-active") label.textContent = "GPS actief";
+  else if (mode === "gps-weak") label.textContent = "GPS onnauwkeurig";
+  else if (mode === "gps-lost") label.textContent = "Geen GPS-signaal";
+  else label.textContent = "Klaar om te starten";
+
+  dot.className = `status-dot ${currentStatusLevel}`;
 }
 
 function trackSpeedSample(km) {
   const t = Date.now();
+
   state.speedSamples.push({ t, km });
-  const cutoff = t - 3 * 60 * 1000; // laatste 3 minuten
-  state.speedSamples = state.speedSamples.filter((s) => s.t >= cutoff);
+
+  const cutoff = t - 3 * 60 * 1000;
+  state.speedSamples = state.speedSamples.filter(sample => sample.t >= cutoff);
 }
 
 function currentSpeedKmh() {
   const samples = state.speedSamples;
+
   if (samples.length < 2) return null;
+
   const first = samples[0];
   const last = samples[samples.length - 1];
-  const dtH = (last.t - first.t) / 3600000;
-  if (dtH <= 0) return null;
-  const dKm = last.km - first.km;
-  const kmh = dKm / dtH;
-  return kmh >= 0 && kmh < 12 ? kmh : null; // filter onrealistische pieken
+
+  const hours = (last.t - first.t) / 3600000;
+  if (hours <= 0) return null;
+
+  const kmh = (last.km - first.km) / hours;
+  if (kmh < 0 || kmh > 10) return null;
+
+  return kmh;
 }
 
-/* ---------------- Automatische pauzedetectie ---------------- */
-
-function autoPauseDetection() {
-  if (state.paused) return; // al manueel gepauzeerd
-  const speed = currentSpeedKmh();
-  const stillMoving = speed === null || speed > 1.0;
-
-  if (!stillMoving) {
-    if (!state.autoPauseCandidateSince) state.autoPauseCandidateSince = Date.now();
-    const stillMs = Date.now() - state.autoPauseCandidateSince;
-    if (stillMs > 5 * 60 * 1000) {
-      startPause(true);
-      state.autoPauseCandidateSince = null;
-    }
-  } else {
-    state.autoPauseCandidateSince = null;
-  }
-}
-
-/* ==========================================================================
-   START / PAUZE
-   ========================================================================== */
+/* Start & pause */
 
 function startTocht() {
   if (state.startTime) return;
+
   state.startTime = nowIso();
   saveState();
+
   startGps();
-  document.getElementById("startBtn").style.display = "none";
-  document.getElementById("pauseToggleBtn").style.display = "block";
-  showToast("Tocht gestart. Succes!");
+  renderDashboard();
+  showToast("Tocht gestart. Rustig beginnen.");
 }
 
-function startPause(auto) {
-  if (state.paused) return;
+function startPause() {
+  if (state.paused || !state.startTime) return;
+
   state.paused = true;
   state.pauseStart = nowIso();
   saveState();
-  updatePauseButton();
-  if (auto) showToast("Automatisch gepauzeerd (geen beweging gedetecteerd).");
+
+  renderDashboard();
 }
 
 function endPause() {
-  if (!state.paused) return;
-  const startedAt = new Date(state.pauseStart).getTime();
-  state.totalPauseMs += Date.now() - startedAt;
+  if (!state.paused || !state.pauseStart) return;
+
+  state.totalPauseMs += Date.now() - new Date(state.pauseStart).getTime();
   state.paused = false;
   state.pauseStart = null;
+
   saveState();
-  updatePauseButton();
+  renderDashboard();
 }
 
-function updatePauseButton() {
-  const btn = document.getElementById("pauseToggleBtn");
-  btn.textContent = state.paused ? "Pauze beëindigen" : "Pauze starten";
-}
-
-/* ==========================================================================
-   CONTROLEPOSTEN
-   ========================================================================== */
+/* Checkpoints */
 
 function getNextCheckpoint() {
-  return CHECKPOINTS.find((cp) => cp.km > state.distanceKm + 0.02) || null;
+  return CHECKPOINTS.find(cp => cp.km > state.distanceKm + 0.02) || null;
 }
 
 function getCurrentCheckpointIndex() {
   let idx = 0;
+
   for (let i = 0; i < CHECKPOINTS.length; i++) {
     if (CHECKPOINTS[i].km <= state.distanceKm + 0.02) idx = i;
   }
+
   return idx;
 }
 
 function checkCheckpointArrivals() {
-  CHECKPOINTS.forEach((cp) => {
+  CHECKPOINTS.forEach(cp => {
     if (cp.km === 0) return;
-    const already = state.checkpointLog[cp.id];
-    if (!already && state.distanceKm >= cp.km - 0.05) {
-      state.checkpointLog[cp.id] = { arrival: nowIso(), pauseStartedAt: null, pauseMs: 0, departed: null };
+
+    if (!state.checkpointLog[cp.id] && state.distanceKm >= cp.km - 0.05) {
+      state.checkpointLog[cp.id] = {
+        arrival: nowIso(),
+        pauseStartedAt: null,
+        pauseMs: 0,
+        departed: null
+      };
+
       saveState();
-      onCheckpointReached(cp);
+      showToast(`Controlepost bereikt: ${cp.name}`);
+
+      if (navigator.vibrate) navigator.vibrate([70, 50, 70]);
+
+      renderCheckpointList();
+      mapView?.setReached(new Set(Object.keys(state.checkpointLog).map(Number)));
     }
   });
-}
-
-function onCheckpointReached(cp) {
-  showToast(`Controlepost bereikt: ${cp.name}`);
-  if (navigator.vibrate) navigator.vibrate([80, 60, 80]);
-  renderCheckpointList();
-  updateMapReachedSet();
-}
-
-function updateMapReachedSet() {
-  if (!mapView) return;
-  mapView.setReached(new Set(Object.keys(state.checkpointLog).map(Number)));
 }
 
 function cpPauseStart(cpId) {
   const log = state.checkpointLog[cpId];
   if (!log || log.pauseStartedAt) return;
+
   log.pauseStartedAt = nowIso();
   saveState();
   renderCheckpointList();
@@ -454,22 +516,24 @@ function cpPauseStart(cpId) {
 
 function cpPauseEnd(cpId) {
   const log = state.checkpointLog[cpId];
-  if (!log || !log.pauseStartedAt) return;
+  if (!log?.pauseStartedAt) return;
+
   log.pauseMs += Date.now() - new Date(log.pauseStartedAt).getTime();
   log.pauseStartedAt = null;
   log.departed = nowIso();
+
   saveState();
   renderCheckpointList();
 }
 
-/* ==========================================================================
-   AFSTANDSMELDINGEN & HERINNERINGEN
-   ========================================================================== */
+/* Alerts */
 
 function checkDistanceAlerts() {
   if (!state.settings.remindersEnabled) return;
-  DISTANCE_ALERTS.forEach((alert) => {
+
+  DISTANCE_ALERTS.forEach(alert => {
     const key = String(alert.km);
+
     if (!state.alertsFired[key] && state.distanceKm >= alert.km) {
       state.alertsFired[key] = true;
       saveState();
@@ -480,256 +544,371 @@ function checkDistanceAlerts() {
 
 function checkPeriodicReminders() {
   if (!state.settings.remindersEnabled || !state.startTime || state.paused) return;
+
   const walkMin = walkingElapsedMs() / 60000;
 
   if (walkMin - state.reminders.lastDrinkAtMinute >= 30) {
     state.reminders.lastDrinkAtMinute = walkMin;
-    notify("Tijd om te drinken.");
-    saveState();
+    notify("Drinkmoment: neem enkele slokken.");
   }
+
   if (walkMin - state.reminders.lastEatAtMinute >= 65) {
     state.reminders.lastEatAtMinute = walkMin;
-    notify("Tijd om iets te eten.");
-    saveState();
+    notify("Eetmoment: neem iets kleins.");
   }
+
   if (state.distanceKm - state.reminders.lastFootCheckKm >= 15) {
     state.reminders.lastFootCheckKm = state.distanceKm;
-    notify("Voetcheck: even controleren.");
-    saveState();
+    notify("Voetcheck: controleer hotspots en sokken.");
   }
+
+  saveState();
 }
 
 function notify(message) {
   showToast(message);
-  if (state.settings.notificationsEnabled && "Notification" in window && Notification.permission === "granted") {
+
+  if (
+    state.settings.notificationsEnabled &&
+    "Notification" in window &&
+    Notification.permission === "granted"
+  ) {
     try {
-      new Notification("Dodentocht", { body: message, icon: "icon-192.png", silent: false });
-    } catch (e) { /* sommige browsers vereisen een service worker registratie */ }
+      new Notification("Dodentocht", {
+        body: message,
+        icon: "icon-192.png"
+      });
+    } catch {}
   }
-  if (navigator.vibrate) navigator.vibrate([50]);
+
+  if (navigator.vibrate) navigator.vibrate(50);
 }
 
-let toastTimer = null;
 function showToast(message) {
   const stack = document.getElementById("toastStack");
+  if (!stack) return;
+
   const el = document.createElement("div");
   el.className = "toast";
   el.textContent = message;
+
   stack.appendChild(el);
-  setTimeout(() => el.remove(), 4200);
+
+  setTimeout(() => {
+    el.remove();
+  }, 3900);
 }
 
-/* ==========================================================================
-   STATUS (groen / oranje / rood)
-   ========================================================================== */
+/* Status */
 
 function computeStatus() {
-  const elapsedH = walkingElapsedMs() / 3600000;
+  const walkMs = walkingElapsedMs();
+  const elapsedH = walkMs / 3600000;
   const remainingKm = Math.max(0, TOTAL_KM - state.distanceKm);
 
-  if (!state.startTime || state.distanceKm < 1 || elapsedH < 0.25) {
-    return { level: "green", title: "Opwarmen", text: "Houd je eigen ritme." };
+  if (!state.startTime) {
+    return {
+      level: "green",
+      title: "Klaar voor de start",
+      text: "Start rustig en laat het tempo vanzelf komen.",
+      marginMin: null,
+      etaDate: null
+    };
   }
 
-  const overallSpeed = state.distanceKm / elapsedH;
-  const etaHoursFromNow = overallSpeed > 0.3 ? remainingKm / overallSpeed : 99;
-  const etaDate = new Date(Date.now() + etaHoursFromNow * 3600000);
-  const deadline = new Date(new Date(state.startTime).getTime() + DEADLINE_HOURS * 3600000);
+  if (state.distanceKm < 1 || elapsedH < 0.25) {
+    return {
+      level: "green",
+      title: "Rustig op gang",
+      text: "Nog niets forceren.",
+      marginMin: null,
+      etaDate: null
+    };
+  }
+
+  const overallSpeed = state.distanceKm / Math.max(.01, elapsedH);
+  const etaHours = remainingKm / Math.max(.3, overallSpeed);
+  const etaDate = new Date(Date.now() + etaHours * 3600000);
+  const deadline = new Date(
+    new Date(state.startTime).getTime() + DEADLINE_HOURS * 3600000
+  );
+
   const marginMin = (deadline.getTime() - etaDate.getTime()) / 60000;
 
-  let level, title, text;
   if (marginMin > 90) {
-    level = "green"; title = "Comfortabel op schema"; text = "Houd je eigen ritme.";
-  } else if (marginMin > 0) {
-    level = "orange"; title = "Marge wordt kleiner"; text = "Beperk lange pauzes.";
-  } else {
-    level = "red"; title = "Focus op de volgende post"; text = "Blijf rustig bewegen, stap voor stap.";
+    return {
+      level: "green",
+      title: "Comfortabel op schema",
+      text: "Houd dit ritme vast zonder te versnellen.",
+      marginMin,
+      etaDate
+    };
   }
 
-  return { level, title, text, etaDate, marginMin, overallSpeed, requiredSpeed: remainingKm / Math.max(0.01, (deadline - Date.now()) / 3600000) };
+  if (marginMin > 0) {
+    return {
+      level: "orange",
+      title: "Marge wordt kleiner",
+      text: "Beperk lange pauzes en blijf rustig bewegen.",
+      marginMin,
+      etaDate
+    };
+  }
+
+  return {
+    level: "red",
+    title: "Weinig tijdsmarge",
+    text: "Focus op de volgende post en vermijd extra stilstand.",
+    marginMin,
+    etaDate
+  };
 }
 
-function setStatusPill(mode) {
-  const label = document.getElementById("statusLabel");
-  const dot = document.getElementById("statusDot");
-  if (mode === "gps-active") { label.textContent = "GPS actief"; }
-  else if (mode === "gps-lost") { label.textContent = "Geen GPS-signaal"; }
-  dot.className = "status-dot " + (currentStatusLevel || "");
-}
-
-let currentStatusLevel = "";
-
-/* ==========================================================================
-   RENDER — DASHBOARD
-   ========================================================================== */
+/* Render */
 
 function renderDashboard() {
-  document.getElementById("distanceValue").textContent = state.distanceKm.toFixed(1);
-  const remaining = Math.max(0, TOTAL_KM - state.distanceKm);
-  document.getElementById("remainingLabel").textContent = `${remaining.toFixed(1)} km te gaan`;
-  document.getElementById("progressFill").style.width = `${Math.min(100, (state.distanceKm / TOTAL_KM) * 100)}%`;
+  const distance = Math.max(0, Math.min(TOTAL_KM, state.distanceKm));
+  const remaining = Math.max(0, TOTAL_KM - distance);
+  const progress = Math.min(100, distance);
+
+  document.getElementById("distanceValue").textContent = distance.toFixed(1);
+  document.getElementById("remainingLabel").textContent = `${remaining.toFixed(1)} km resterend`;
+  document.getElementById("progressPercent").textContent = `${progress.toFixed(0)}%`;
+  document.getElementById("progressFill").style.width = `${progress}%`;
+  document.getElementById("elapsedCompact").textContent = `${fmtHM(walkingElapsedMs())} onderweg`;
 
   const elapsedH = walkingElapsedMs() / 3600000;
-  const avgPace = elapsedH > 0.02 ? state.distanceKm / elapsedH : null;
-  document.getElementById("paceValue").textContent = avgPace ? avgPace.toFixed(1) : "–";
+  const avgSpeed = elapsedH > 0.03 ? distance / elapsedH : null;
+  const liveSpeed = currentSpeedKmh();
 
-  const speed = currentSpeedKmh();
-  document.getElementById("speedValue").textContent = speed !== null ? speed.toFixed(1) : "–";
+  document.getElementById("paceValue").textContent =
+    avgSpeed ? avgSpeed.toFixed(1) : "—";
 
-  document.getElementById("elapsedValue").textContent = fmtHM(walkingElapsedMs());
-  document.getElementById("pauseValue").textContent = `${Math.round(state.totalPauseMs / 60000)} min pauze`;
+  document.getElementById("speedValue").textContent =
+    liveSpeed !== null ? liveSpeed.toFixed(1) : "—";
 
   const status = computeStatus();
   currentStatusLevel = status.level;
-  setStatusPill(watchId !== null ? "gps-active" : "gps-lost");
 
-  if (status.etaDate) {
-    document.getElementById("etaValue").textContent = fmtClock(status.etaDate);
-    const marginTxt = status.marginMin >= 0
-      ? `${Math.round(status.marginMin)} min marge`
-      : `${Math.round(-status.marginMin)} min te kort`;
-    document.getElementById("marginValue").textContent = marginTxt;
-  } else {
-    document.getElementById("etaValue").textContent = "–:–";
-    document.getElementById("marginValue").textContent = "–";
-  }
+  const statusBanner = document.getElementById("statusBanner");
+  statusBanner.className = `status-card glass ${status.level}`;
 
-  const banner = document.getElementById("statusBanner");
-  banner.className = "glass card status-banner " + status.level;
+  document.getElementById("statusBannerIcon").textContent =
+    status.level === "green" ? "✓" : status.level === "orange" ? "!" : "×";
+
   document.getElementById("statusBannerTitle").textContent = status.title;
   document.getElementById("statusBannerText").textContent = status.text;
 
-  const next = getNextCheckpoint();
-  if (next) {
-    const toGo = Math.max(0, next.km - state.distanceKm);
-    document.getElementById("nextCpName").textContent = next.name;
-    document.getElementById("nextCpDist").textContent = `${toGo.toFixed(1)} km`;
-    const schedH = scheduleHoursForKm(next.km);
-    const scheduleEta = state.startTime
-      ? new Date(new Date(state.startTime).getTime() + schedH * 3600000)
-      : null;
-    let meta = `Km ${next.km} · pauze ${next.rest} min`;
-    if (avgPace && toGo > 0) {
-      const etaNext = new Date(Date.now() + (toGo / Math.max(0.3, avgPace)) * 3600000);
-      meta += ` · aankomst ± ${fmtClock(etaNext)}`;
-    }
-    document.getElementById("nextCpMeta").textContent = meta;
+  document.getElementById("heroStatusText").textContent =
+    state.paused ? "Pauze actief" : status.title;
+
+  if (status.etaDate) {
+    document.getElementById("etaValue").textContent = fmtClock(status.etaDate);
+
+    const marginText =
+      status.marginMin >= 0
+        ? `${Math.round(status.marginMin)} min marge`
+        : `${Math.round(Math.abs(status.marginMin))} min boven 24u`;
+
+    document.getElementById("marginValue").textContent = marginText;
   } else {
-    document.getElementById("nextCpName").textContent = "Finish bereikt";
-    document.getElementById("nextCpDist").textContent = "🏁";
-    document.getElementById("nextCpMeta").textContent = "Proficiat!";
+    document.getElementById("etaValue").textContent = "—:—";
+    document.getElementById("marginValue").textContent = "Nog geen betrouwbare ETA";
   }
 
-  document.getElementById("startBtn").style.display = state.startTime ? "none" : "block";
-  document.getElementById("pauseToggleBtn").style.display = state.startTime ? "block" : "none";
-  updatePauseButton();
-}
+  const next = getNextCheckpoint();
 
-/* ==========================================================================
-   RENDER — CONTROLEPOSTEN
-   ========================================================================== */
+  if (next) {
+    const toGo = Math.max(0, next.km - distance);
+    const prevIndex = Math.max(0, CHECKPOINTS.indexOf(next) - 1);
+    const prevKm = CHECKPOINTS[prevIndex]?.km || 0;
+    const legLength = Math.max(.01, next.km - prevKm);
+    const legDone = Math.max(0, distance - prevKm);
+    const legProgress = Math.min(100, legDone / legLength * 100);
+
+    document.getElementById("nextCpName").textContent = next.name;
+    document.getElementById("nextCpDist").textContent = `${toGo.toFixed(1)} km`;
+    document.getElementById("nextCpProgress").style.width = `${legProgress}%`;
+
+    let nextEtaText = `km ${next.km.toFixed(1)} · pauze ${next.rest} min`;
+
+    if (avgSpeed && avgSpeed > .5) {
+      const nextEta = new Date(Date.now() + toGo / avgSpeed * 3600000);
+      nextEtaText += ` · ± ${fmtClock(nextEta)}`;
+    }
+
+    document.getElementById("nextCpMeta").textContent = nextEtaText;
+
+    document.getElementById("mapNextName").textContent = next.name;
+    document.getElementById("mapNextDistance").textContent = `${toGo.toFixed(1)} km`;
+
+    const walkMinutes = avgSpeed && avgSpeed > .5
+      ? Math.round(toGo / avgSpeed * 60)
+      : null;
+
+    document.getElementById("mapNextMeta").textContent =
+      walkMinutes
+        ? `ongeveer ${walkMinutes} min · km ${next.km.toFixed(1)}`
+        : `km ${next.km.toFixed(1)}`;
+  } else {
+    document.getElementById("nextCpName").textContent = "Finish";
+    document.getElementById("nextCpDist").textContent = "🏁";
+    document.getElementById("nextCpMeta").textContent = "Bornem · 100 km";
+    document.getElementById("nextCpProgress").style.width = "100%";
+
+    document.getElementById("mapNextName").textContent = "Finish";
+    document.getElementById("mapNextDistance").textContent = "0.0 km";
+    document.getElementById("mapNextMeta").textContent = "Bornem";
+  }
+
+  const startBtn = document.getElementById("startBtn");
+  const pauseBtn = document.getElementById("pauseToggleBtn");
+
+  startBtn.hidden = !!state.startTime;
+  pauseBtn.hidden = !state.startTime;
+  pauseBtn.textContent = state.paused ? "Pauze beëindigen" : "Pauze starten";
+
+  setGpsStatus(
+    !state.startTime ? "idle" : watchId !== null ? "gps-active" : "gps-lost"
+  );
+
+  mapView?.updateProgress(distance, null);
+}
 
 function renderCheckpointList() {
   const list = document.getElementById("checkpointList");
+  if (!list) return;
+
   list.innerHTML = "";
-  const currentIdx = getCurrentCheckpointIndex();
+
+  const currentIndex = getCurrentCheckpointIndex();
+  const reachedCount = Object.keys(state.checkpointLog).length;
+
+  document.getElementById("checkpointHeaderValue").textContent =
+    `${Math.min(reachedCount, 13)} / 13`;
 
   CHECKPOINTS.forEach((cp, i) => {
     const log = state.checkpointLog[cp.id];
-    const reached = !!log || cp.km === 0 && state.startTime;
-    const isCurrent = i === currentIdx && cp.km !== 0;
+    const reached = !!log || (cp.km === 0 && !!state.startTime);
+    const current = i === currentIndex + 1 || (i === currentIndex && !reached);
 
-    const el = document.createElement("div");
-    el.className = "cp-item" + (reached ? " reached" : "") + (isCurrent ? " current" : "");
+    const card = document.createElement("div");
+    card.className =
+      `cp-item${reached ? " reached" : ""}${current ? " current" : ""}`;
 
     const toGo = Math.max(0, cp.km - state.distanceKm);
-    const schedH = scheduleHoursForKm(cp.km);
-    const schedDate = state.startTime
-      ? new Date(new Date(state.startTime).getTime() + schedH * 3600000)
-      : null;
 
-    let arrivalTxt = "";
-    if (log) {
-      arrivalTxt = `Aangekomen ${fmtClock(new Date(log.arrival))}`;
-    } else if (schedDate) {
-      arrivalTxt = `Verwacht ± ${fmtClock(schedDate)}`;
+    let arrival = "Nog niet bereikt";
+
+    if (cp.km === 0 && state.startTime) {
+      arrival = `Gestart ${fmtClock(new Date(state.startTime))}`;
+    } else if (log?.arrival) {
+      arrival = `Aangekomen ${fmtClock(new Date(log.arrival))}`;
+    } else if (state.startTime) {
+      const scheduleDate = new Date(
+        new Date(state.startTime).getTime() +
+        scheduleHoursForKm(cp.km) * 3600000
+      );
+      arrival = `Richttijd ${fmtClock(scheduleDate)}`;
     }
 
-    el.innerHTML = `
+    card.innerHTML = `
       <div class="cp-top">
-        <span class="cp-name">${cp.name}</span>
-        <span class="cp-km">${cp.km} km</span>
+        <div class="cp-name">${escapeHtml(cp.name)}</div>
+        <div class="cp-km">${cp.km.toFixed(1)} km</div>
       </div>
-      <div class="cp-row"><span>${arrivalTxt || "—"}</span><span>${cp.km > 0 ? toGo.toFixed(1) + " km te gaan" : ""}</span></div>
-      ${cp.supplies.length ? `<div class="cp-supplies">Bevoorrading: ${cp.supplies.join(", ")}</div>` : ""}
-      ${cp.rest ? `<div class="cp-row"><span>Geplande pauze</span><span>${cp.rest} min</span></div>` : ""}
+
+      <div class="cp-row">
+        <span>${arrival}</span>
+        <span>${cp.km > state.distanceKm ? `${toGo.toFixed(1)} km` : "✓"}</span>
+      </div>
+
+      ${cp.supplies.length
+        ? `<div class="cp-supplies">${cp.supplies.map(escapeHtml).join(" · ")}</div>`
+        : ""}
+
+      ${cp.rest
+        ? `<div class="cp-row"><span>Geplande pauze</span><span>${cp.rest} min</span></div>`
+        : ""}
     `;
 
-    if (cp.km > 0) {
-      const pauseRow = document.createElement("div");
-      pauseRow.className = "cp-pause-row";
-      const startBtn = document.createElement("button");
-      startBtn.className = "pill-btn small ghost";
-      startBtn.textContent = "Pauze start";
-      startBtn.disabled = !log || !!log.pauseStartedAt;
-      startBtn.addEventListener("click", () => cpPauseStart(cp.id));
+    if (cp.km > 0 && cp.km < 100) {
+      const row = document.createElement("div");
+      row.className = "cp-pause-row";
 
-      const endBtn = document.createElement("button");
-      endBtn.className = "pill-btn small ghost";
-      endBtn.textContent = "Pauze einde";
-      endBtn.disabled = !log || !log.pauseStartedAt;
-      endBtn.addEventListener("click", () => cpPauseEnd(cp.id));
+      const start = document.createElement("button");
+      start.className = "small-button";
+      start.textContent = "Pauze start";
+      start.disabled = !log || !!log.pauseStartedAt;
+      start.addEventListener("click", () => cpPauseStart(cp.id));
 
-      pauseRow.appendChild(startBtn);
-      pauseRow.appendChild(endBtn);
-      el.appendChild(pauseRow);
+      const end = document.createElement("button");
+      end.className = "small-button";
+      end.textContent = "Pauze einde";
+      end.disabled = !log || !log.pauseStartedAt;
+      end.addEventListener("click", () => cpPauseEnd(cp.id));
+
+      row.append(start, end);
+      card.appendChild(row);
 
       if (log && (log.pauseStartedAt || log.pauseMs > 0)) {
-        const timerEl = document.createElement("div");
-        timerEl.className = "cp-pause-timer";
-        const liveMs = log.pauseStartedAt ? Date.now() - new Date(log.pauseStartedAt).getTime() : 0;
-        timerEl.textContent = fmtHM(log.pauseMs + liveMs) + " pauze";
-        el.appendChild(timerEl);
+        const liveMs = log.pauseStartedAt
+          ? Date.now() - new Date(log.pauseStartedAt).getTime()
+          : 0;
+
+        const timer = document.createElement("div");
+        timer.className = "cp-pause-timer";
+        timer.textContent = `${fmtHM(log.pauseMs + liveMs)} pauze`;
+
+        card.appendChild(timer);
       }
     }
 
-    list.appendChild(el);
+    list.appendChild(card);
   });
 }
 
-/* ==========================================================================
-   MANUELE CORRECTIE
-   ========================================================================== */
+/* Correction */
 
 function populateCorrectionForm() {
-  const sel = document.getElementById("corrCp");
-  sel.innerHTML = CHECKPOINTS.map((cp) => `<option value="${cp.km}">${cp.name} (${cp.km} km)</option>`).join("");
+  const cpSelect = document.getElementById("corrCp");
+
+  cpSelect.innerHTML = CHECKPOINTS
+    .map(cp => `<option value="${cp.km}">${escapeHtml(cp.name)} · ${cp.km.toFixed(1)} km</option>`)
+    .join("");
+
   document.getElementById("corrKm").value = state.distanceKm.toFixed(1);
+  document.getElementById("corrPause").value = Math.round(state.totalPauseMs / 60000);
+
   if (state.startTime) {
-    const d = new Date(state.startTime);
-    const local = new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+    const date = new Date(state.startTime);
+    const local = new Date(date.getTime() - date.getTimezoneOffset() * 60000)
+      .toISOString()
+      .slice(0, 16);
+
     document.getElementById("corrStart").value = local;
   }
-  document.getElementById("corrPause").value = Math.round(state.totalPauseMs / 60000);
 }
 
 function applyCorrection() {
-  const km = parseFloat(document.getElementById("corrKm").value);
-  const startVal = document.getElementById("corrStart").value;
-  const pauseMin = parseFloat(document.getElementById("corrPause").value);
+  const km = Number(document.getElementById("corrKm").value);
+  const start = document.getElementById("corrStart").value;
+  const pauseMin = Number(document.getElementById("corrPause").value);
 
   if (Number.isFinite(km)) {
     state.distanceKm = Math.max(0, Math.min(TOTAL_KM, km));
     state.maxDistanceKm = state.distanceKm;
+
     if (route.loaded) {
-      const p = route.pointAtDistance(state.distanceKm);
-      const proj = p ? route.projectDistanceKm(p.lat, p.lon, null) : null;
-      state.gpsIndexHint = proj ? proj.index : null;
+      const pt = route.pointAtDistance(state.distanceKm);
+      state.gpsIndexHint = pt?.index ?? null;
     }
   }
-  if (startVal) {
-    state.startTime = new Date(startVal).toISOString();
+
+  if (start) {
+    state.startTime = new Date(start).toISOString();
   }
+
   if (Number.isFinite(pauseMin)) {
     state.totalPauseMs = Math.max(0, pauseMin) * 60000;
   }
@@ -737,39 +916,40 @@ function applyCorrection() {
   saveState();
   renderDashboard();
   renderCheckpointList();
+
   showToast("Correctie toegepast.");
 }
 
-/* ==========================================================================
-   VOET- & LICHAAMSCHECK
-   ========================================================================== */
+/* Checklist */
 
 const CHECKLIST_QUESTIONS = [
-  { id: "blaar", label: "Blaar / hotspot", severe: false },
+  { id: "blaar", label: "Blaar of hotspot", severe: false },
   { id: "nat", label: "Natte sokken", severe: false },
-  { id: "pijn", label: "Pijn", severe: false },
+  { id: "pijn", label: "Ongewone of toenemende pijn", severe: true },
   { id: "misselijk", label: "Misselijkheid", severe: true },
   { id: "duizelig", label: "Duizeligheid", severe: true },
-  { id: "gedronken", label: "Genoeg gedronken", invert: true, severe: false },
-  { id: "gegeten", label: "Genoeg gegeten", invert: true, severe: false },
+  { id: "gedronken", label: "Genoeg gedronken", severe: false },
+  { id: "gegeten", label: "Genoeg gegeten", severe: false }
 ];
 
 function renderChecklist() {
   const wrap = document.getElementById("checklistItems");
-  wrap.innerHTML = CHECKLIST_QUESTIONS.map(
-    (q) => `
+
+  wrap.innerHTML = CHECKLIST_QUESTIONS.map(q => `
     <label class="checklist-row">
-      <span>${q.label}</span>
+      <span>${escapeHtml(q.label)}</span>
       <input type="checkbox" data-id="${q.id}" />
-    </label>`
-  ).join("");
-  document.getElementById("checklistWarning").style.display = "none";
+    </label>
+  `).join("");
+
+  document.getElementById("checklistWarning").hidden = true;
 }
 
 function openChecklist() {
   renderChecklist();
   document.getElementById("checklistModal").classList.add("open");
 }
+
 function closeChecklist() {
   document.getElementById("checklistModal").classList.remove("open");
 }
@@ -777,26 +957,33 @@ function closeChecklist() {
 function saveChecklist() {
   const answers = {};
   let severe = false;
-  document.querySelectorAll("#checklistItems input[type=checkbox]").forEach((cb) => {
+
+  document.querySelectorAll("#checklistItems input[type=checkbox]").forEach(cb => {
     answers[cb.dataset.id] = cb.checked;
-    const q = CHECKLIST_QUESTIONS.find((qq) => qq.id === cb.dataset.id);
-    if (q && q.severe && cb.checked) severe = true;
+
+    const question = CHECKLIST_QUESTIONS.find(q => q.id === cb.dataset.id);
+    if (question?.severe && cb.checked) severe = true;
   });
 
+  state.checklistHistory.push({
+    t: nowIso(),
+    km: state.distanceKm,
+    answers,
+    severe
+  });
+
+  saveState();
+
   if (severe) {
-    document.getElementById("checklistWarning").style.display = "block";
-    return; // laat de waarschuwing zien, gebruiker sluit zelf na het lezen
+    document.getElementById("checklistWarning").hidden = false;
+    return;
   }
 
-  state.checklistHistory.push({ t: nowIso(), answers, severe });
-  saveState();
   closeChecklist();
   showToast("Check opgeslagen.");
 }
 
-/* ==========================================================================
-   INSTELLINGEN
-   ========================================================================== */
+/* Settings */
 
 function applySettingsToUI() {
   document.getElementById("powerSavingToggle").checked = state.settings.powerSaving;
@@ -804,17 +991,41 @@ function applySettingsToUI() {
   document.getElementById("wakeLockToggle").checked = state.settings.wakeLock;
 }
 
+async function requestWakeLock() {
+  if (!("wakeLock" in navigator)) return;
+
+  try {
+    wakeLockSentinel = await navigator.wakeLock.request("screen");
+  } catch {}
+}
+
+function releaseWakeLock() {
+  if (!wakeLockSentinel) return;
+
+  wakeLockSentinel.release().catch(() => {});
+  wakeLockSentinel = null;
+}
+
 function exportData() {
   const payload = {
     exportedAt: nowIso(),
     state,
-    checkpoints: CHECKPOINTS,
+    routeLoaded: route.loaded,
+    routeKm: route.totalKm,
+    checkpoints: CHECKPOINTS
   };
-  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+
+  const blob = new Blob(
+    [JSON.stringify(payload, null, 2)],
+    { type: "application/json" }
+  );
+
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
+
   a.href = url;
-  a.download = `dodentocht2026-${new Date().toISOString().slice(0, 10)}.json`;
+  a.download = `dodentocht-2026-${new Date().toISOString().slice(0,10)}.json`;
+
   document.body.appendChild(a);
   a.click();
   a.remove();
@@ -822,50 +1033,45 @@ function exportData() {
 }
 
 function resetTocht() {
-  if (!confirm("Weet je zeker dat je alle voortgang wilt wissen?")) return;
-  const settings = state.settings;
+  if (!confirm("Alle voortgang van deze tocht wissen?")) return;
+
+  const settings = { ...state.settings };
   state = defaultState();
   state.settings = settings;
+
   saveState();
   stopGps();
+
   renderDashboard();
   renderCheckpointList();
+
+  if (route.loaded) {
+    mapView?.updateProgress(0, null);
+  }
+
   showToast("Tocht gereset.");
 }
 
-/* ==========================================================================
-   WAKE LOCK & FULLSCREEN
-   ========================================================================== */
+/* Events */
 
-let wakeLockSentinel = null;
-
-async function requestWakeLock() {
-  if (!("wakeLock" in navigator)) return;
-  try {
-    wakeLockSentinel = await navigator.wakeLock.request("screen");
-  } catch (e) { /* kan geweigerd worden, bv. lage batterij; stil negeren */ }
-}
-function releaseWakeLock() {
-  if (wakeLockSentinel) { wakeLockSentinel.release().catch(() => {}); wakeLockSentinel = null; }
-}
-
-document.addEventListener("visibilitychange", () => {
-  if (document.visibilityState === "visible" && state.settings.wakeLock) requestWakeLock();
+document.querySelectorAll(".tab-btn").forEach(btn => {
+  btn.addEventListener("click", () => showScreen(btn.dataset.screen));
 });
 
 document.getElementById("fullscreenBtn").addEventListener("click", () => {
-  if (!document.fullscreenElement) document.documentElement.requestFullscreen?.();
-  else document.exitFullscreen?.();
+  if (!document.fullscreenElement) {
+    document.documentElement.requestFullscreen?.();
+  } else {
+    document.exitFullscreen?.();
+  }
 });
-
-/* ==========================================================================
-   EVENT WIRING
-   ========================================================================== */
 
 document.getElementById("startBtn").addEventListener("click", startTocht);
+
 document.getElementById("pauseToggleBtn").addEventListener("click", () => {
-  state.paused ? endPause() : startPause(false);
+  state.paused ? endPause() : startPause();
 });
+
 document.getElementById("checklistBtn").addEventListener("click", openChecklist);
 document.getElementById("recalibrateBtn").addEventListener("click", recalibrateGps);
 
@@ -873,81 +1079,89 @@ document.getElementById("checklistCancelBtn").addEventListener("click", closeChe
 document.getElementById("checklistSaveBtn").addEventListener("click", saveChecklist);
 
 document.getElementById("applyCorrectionBtn").addEventListener("click", applyCorrection);
-document.getElementById("gpxFileInput").addEventListener("change", (e) => {
-  if (e.target.files[0]) handleGpxFile(e.target.files[0]);
+
+document.getElementById("corrCp").addEventListener("change", e => {
+  document.getElementById("corrKm").value = Number(e.target.value).toFixed(1);
 });
 
-document.getElementById("powerSavingToggle").addEventListener("change", (e) => {
+document.getElementById("gpxFileInput").addEventListener("change", e => {
+  const file = e.target.files?.[0];
+  if (file) handleGpxFile(file);
+});
+
+document.getElementById("powerSavingToggle").addEventListener("change", e => {
   state.settings.powerSaving = e.target.checked;
   saveState();
-  if (watchId !== null) startGps(); // herstart met nieuwe instellingen
+
+  if (watchId !== null) startGps();
 });
-document.getElementById("remindersToggle").addEventListener("change", (e) => {
+
+document.getElementById("remindersToggle").addEventListener("change", e => {
   state.settings.remindersEnabled = e.target.checked;
   saveState();
 });
-document.getElementById("wakeLockToggle").addEventListener("change", (e) => {
+
+document.getElementById("wakeLockToggle").addEventListener("change", e => {
   state.settings.wakeLock = e.target.checked;
   saveState();
-  if (e.target.checked) requestWakeLock(); else releaseWakeLock();
+
+  if (e.target.checked) requestWakeLock();
+  else releaseWakeLock();
 });
+
 document.getElementById("notifPermBtn").addEventListener("click", async () => {
-  if (!("Notification" in window)) { showToast("Meldingen worden niet ondersteund."); return; }
-  const perm = await Notification.requestPermission();
-  state.settings.notificationsEnabled = perm === "granted";
+  if (!("Notification" in window)) {
+    showToast("Browsermeldingen worden niet ondersteund.");
+    return;
+  }
+
+  const permission = await Notification.requestPermission();
+  state.settings.notificationsEnabled = permission === "granted";
+
   saveState();
-  showToast(perm === "granted" ? "Meldingen ingeschakeld." : "Meldingen niet toegestaan.");
+
+  showToast(
+    permission === "granted"
+      ? "Meldingen toegestaan."
+      : "Meldingen niet toegestaan."
+  );
 });
+
 document.getElementById("exportBtn").addEventListener("click", exportData);
 document.getElementById("resetBtn").addEventListener("click", resetTocht);
 
 document.getElementById("mapResetBtn").addEventListener("click", () => {
-  if (!mapView) return;
-  mapView.resetView();
-  document.getElementById("mapFollowBtn").classList.remove("active");
+  mapView?.fitFullRoute();
 });
-document.getElementById("mapFollowBtn").addEventListener("click", (e) => {
+
+document.getElementById("mapFollowBtn").addEventListener("click", () => {
   if (!mapView) return;
-  mapView.followMode = !mapView.followMode;
-  e.currentTarget.classList.toggle("active", mapView.followMode);
-  if (mapView.followMode && mapView.userLatLon) {
-    mapView.map.panTo([mapView.userLatLon.lat, mapView.userLatLon.lon], { animate: true });
+
+  mapView.setFollowMode(!mapView.followMode);
+
+  if (mapView.followMode && !mapView.userLatLon) {
+    showToast("Nog geen GPS-positie ontvangen.");
   }
 });
 
-document.getElementById("downloadTilesBtn").addEventListener("click", async () => {
-  const statusEl = document.getElementById("tileDownloadStatus");
-  const btn = document.getElementById("downloadTilesBtn");
-  if (!route.loaded) {
-    statusEl.textContent = "Laad eerst de route (tabblad Correctie).";
-    statusEl.className = "gpx-status err";
-    return;
+document.addEventListener("visibilitychange", () => {
+  if (
+    document.visibilityState === "visible" &&
+    state.settings.wakeLock
+  ) {
+    requestWakeLock();
   }
-  btn.disabled = true;
-  statusEl.className = "gpx-status";
-  statusEl.textContent = "Bezig met downloaden… hou de app open en blijf op wifi.";
-  try {
-    await downloadRouteTiles(route, (done, total) => {
-      statusEl.textContent = `Kaarttegels downloaden: ${done} / ${total}`;
-    });
-    statusEl.textContent = "Kaarttegels van de hele route zijn opgeslagen voor offline gebruik.";
-    statusEl.className = "gpx-status ok";
-  } catch (e) {
-    statusEl.textContent = "Downloaden mislukt. Controleer je internetverbinding en probeer opnieuw.";
-    statusEl.className = "gpx-status err";
-  }
-  btn.disabled = false;
 });
 
-/* ==========================================================================
-   HOOFDLUS
-   ========================================================================== */
+/* Loop + boot */
 
 function tick() {
   checkCheckpointArrivals();
   checkDistanceAlerts();
   checkPeriodicReminders();
+
   renderDashboard();
+
   if (document.getElementById("screen-checkpoints").classList.contains("active")) {
     renderCheckpointList();
   }
@@ -955,28 +1169,37 @@ function tick() {
 
 setInterval(tick, 1000);
 
-/* ==========================================================================
-   OPSTARTEN
-   ========================================================================== */
-
 async function boot() {
-  populateCorrectionForm();
   applySettingsToUI();
+  populateCorrectionForm();
 
   mapView = new MapView("leafletMap", route, CHECKPOINTS);
 
   await initRoute();
-  updateMapReachedSet();
+
+  mapView.setReached(
+    new Set(Object.keys(state.checkpointLog).map(Number))
+  );
 
   if (state.startTime) {
     startGps();
-    if (state.settings.wakeLock) requestWakeLock();
+
+    if (state.settings.wakeLock) {
+      requestWakeLock();
+    }
+  } else {
+    setGpsStatus("idle");
   }
+
   renderDashboard();
   renderCheckpointList();
 
   if ("serviceWorker" in navigator) {
-    try { await navigator.serviceWorker.register("sw.js"); } catch (e) { /* offline-first blijft werken zonder */ }
+    try {
+      await navigator.serviceWorker.register("sw.js");
+    } catch (err) {
+      console.warn("Service worker registratie mislukt", err);
+    }
   }
 }
 

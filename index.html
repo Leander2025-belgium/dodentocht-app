@@ -1,245 +1,297 @@
 <!DOCTYPE html>
 <html lang="nl">
 <head>
-<meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1, user-scalable=no" />
-<title>Dodentocht 2026 Companion</title>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1, user-scalable=no" />
+  <title>Dodentocht 2026</title>
 
-<meta name="theme-color" content="#0a0a0e" />
-<meta name="color-scheme" content="dark" />
-<meta name="apple-mobile-web-app-capable" content="yes" />
-<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-<meta name="apple-mobile-web-app-title" content="Dodentocht" />
-<link rel="apple-touch-icon" href="icon-192.png" />
-<link rel="manifest" href="manifest.webmanifest" />
-<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" />
-<link rel="stylesheet" href="style.css" />
+  <meta name="theme-color" content="#07090d" />
+  <meta name="color-scheme" content="dark" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Dodentocht" />
+
+  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="apple-touch-icon" href="icon-192.png" />
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" />
+  <link rel="stylesheet" href="style.css" />
 </head>
+
 <body>
+  <div class="ambient ambient-a"></div>
+  <div class="ambient ambient-b"></div>
 
-<!-- ======================= HEADER ======================= -->
-<header class="app-header">
-  <div class="status-pill" id="statusPill">
-    <span class="status-dot" id="statusDot"></span>
-    <span id="statusLabel">Klaar om te starten</span>
+  <header class="app-header">
+    <div class="header-left">
+      <div class="app-kicker">DODENTOCHT 2026</div>
+      <div class="status-pill" id="statusPill">
+        <span class="status-dot" id="statusDot"></span>
+        <span id="statusLabel">Klaar om te starten</span>
+      </div>
+    </div>
+
+    <button class="circle-button" id="fullscreenBtn" aria-label="Volledig scherm">
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M8 3H3v5M16 3h5v5M8 21H3v-5M16 21h5v-5" />
+      </svg>
+    </button>
+  </header>
+
+  <main id="screens">
+    <!-- TODAY -->
+    <section class="screen active" id="screen-dashboard">
+      <div class="hero-shell glass-strong">
+        <div class="hero-topline">
+          <span id="heroStatusText">Klaar voor de start</span>
+          <span id="progressPercent">0%</span>
+        </div>
+
+        <div class="hero-number-row">
+          <span class="hero-number" id="distanceValue">0.0</span>
+          <span class="hero-unit">km</span>
+        </div>
+
+        <div class="hero-caption">afgelegd van 100 km</div>
+
+        <div class="progress-track" aria-hidden="true">
+          <div class="progress-fill" id="progressFill"></div>
+        </div>
+
+        <div class="remaining-row">
+          <span id="remainingLabel">100.0 km resterend</span>
+          <span id="elapsedCompact">0:00 onderweg</span>
+        </div>
+      </div>
+
+      <div class="next-card glass" id="nextCpCard">
+        <div class="section-eyebrow">VOLGENDE CONTROLEPOST</div>
+        <div class="next-main">
+          <div>
+            <div class="next-name" id="nextCpName">—</div>
+            <div class="next-meta" id="nextCpMeta">Route laden…</div>
+          </div>
+          <div class="next-distance" id="nextCpDist">—</div>
+        </div>
+        <div class="mini-progress"><div id="nextCpProgress"></div></div>
+      </div>
+
+      <div class="stats-strip glass">
+        <div class="stat">
+          <div class="stat-value" id="paceValue">—</div>
+          <div class="stat-label">gem. km/u</div>
+        </div>
+        <div class="stat-divider"></div>
+        <div class="stat">
+          <div class="stat-value" id="speedValue">—</div>
+          <div class="stat-label">nu km/u</div>
+        </div>
+        <div class="stat-divider"></div>
+        <div class="stat">
+          <div class="stat-value" id="etaValue">—:—</div>
+          <div class="stat-label">finish</div>
+        </div>
+      </div>
+
+      <div class="status-card glass" id="statusBanner">
+        <div class="status-icon" id="statusBannerIcon">✓</div>
+        <div>
+          <div class="status-title" id="statusBannerTitle">Comfortabel op schema</div>
+          <div class="status-text" id="statusBannerText">Houd je eigen ritme.</div>
+          <div class="status-sub" id="marginValue">—</div>
+        </div>
+      </div>
+
+      <div class="action-grid">
+        <button class="primary-action" id="startBtn">Start tocht</button>
+        <button class="secondary-action" id="pauseToggleBtn" hidden>Pauze starten</button>
+        <button class="secondary-action" id="checklistBtn">Lichaamscheck</button>
+        <button class="secondary-action" id="recalibrateBtn">GPS herkalibreren</button>
+      </div>
+    </section>
+
+    <!-- CHECKPOINTS -->
+    <section class="screen" id="screen-checkpoints">
+      <div class="screen-heading">
+        <div>
+          <div class="section-eyebrow">ROUTE</div>
+          <h1>Controleposten</h1>
+        </div>
+        <div class="screen-heading-value" id="checkpointHeaderValue">0 / 13</div>
+      </div>
+
+      <div class="checkpoint-list" id="checkpointList"></div>
+    </section>
+
+    <!-- MAP -->
+    <section class="screen map-screen" id="screen-map">
+      <div class="map-wrap">
+        <div id="leafletMap" class="leaflet-map"></div>
+
+        <div class="map-empty" id="mapEmpty">
+          <div class="map-empty-card glass">
+            <strong>Route nog niet geladen</strong>
+            <span>Laad het meegeleverde route.gpx of kies een GPX-bestand bij Meer.</span>
+          </div>
+        </div>
+
+        <div class="map-top-controls">
+          <button class="map-circle glass" id="mapResetBtn" aria-label="Toon volledige route">
+            <svg viewBox="0 0 24 24"><path d="M4 7V4h3M20 7V4h-3M4 17v3h3M20 17v3h-3"/></svg>
+          </button>
+          <button class="map-circle glass" id="mapFollowBtn" aria-label="Volg mijn positie">
+            <svg viewBox="0 0 24 24"><path d="M12 3l6.5 17-6.5-4-6.5 4L12 3z"/></svg>
+          </button>
+        </div>
+
+        <div class="offroute-banner glass" id="offRouteBanner" hidden>
+          <div class="offroute-icon">!</div>
+          <div>
+            <strong>Route verlaten</strong>
+            <span id="offRouteText">Je bent van het parcours verwijderd.</span>
+          </div>
+        </div>
+
+        <div class="map-bottom-card glass-strong" id="mapBottomCard">
+          <div>
+            <div class="section-eyebrow">VOLGENDE POST</div>
+            <div class="map-next-name" id="mapNextName">—</div>
+            <div class="map-next-meta" id="mapNextMeta">GPS wordt voorbereid</div>
+          </div>
+          <div class="map-next-distance" id="mapNextDistance">—</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- MORE -->
+    <section class="screen" id="screen-more">
+      <div class="screen-heading">
+        <div>
+          <div class="section-eyebrow">BEHEER</div>
+          <h1>Meer</h1>
+        </div>
+      </div>
+
+      <div class="group-card glass">
+        <div class="group-title">GPS & batterij</div>
+
+        <label class="setting-row">
+          <div>
+            <strong>Energiebesparende GPS</strong>
+            <span>Minder frequente fixes voor langere batterijduur.</span>
+          </div>
+          <input class="ios-switch" type="checkbox" id="powerSavingToggle" />
+        </label>
+
+        <label class="setting-row">
+          <div>
+            <strong>Herinneringen</strong>
+            <span>Drinken, eten en voetcheck.</span>
+          </div>
+          <input class="ios-switch" type="checkbox" id="remindersToggle" />
+        </label>
+
+        <label class="setting-row">
+          <div>
+            <strong>Scherm actief houden</strong>
+            <span>Voorkomt automatisch uitschakelen wanneer ondersteund.</span>
+          </div>
+          <input class="ios-switch" type="checkbox" id="wakeLockToggle" />
+        </label>
+
+        <div class="setting-row">
+          <div>
+            <strong>Meldingen</strong>
+            <span>Sta browsermeldingen toe.</span>
+          </div>
+          <button class="small-button" id="notifPermBtn">Toestaan</button>
+        </div>
+      </div>
+
+      <div class="group-card glass">
+        <div class="group-title">Manuele correctie</div>
+
+        <label class="field">
+          <span>Huidige kilometer</span>
+          <input type="number" id="corrKm" min="0" max="100" step="0.1" inputmode="decimal" />
+        </label>
+
+        <label class="field">
+          <span>Controlepost</span>
+          <select id="corrCp"></select>
+        </label>
+
+        <label class="field">
+          <span>Starttijd</span>
+          <input type="datetime-local" id="corrStart" />
+        </label>
+
+        <label class="field">
+          <span>Totale pauze (min)</span>
+          <input type="number" id="corrPause" min="0" step="1" inputmode="numeric" />
+        </label>
+
+        <button class="primary-action full" id="applyCorrectionBtn">Correctie toepassen</button>
+      </div>
+
+      <div class="group-card glass">
+        <div class="group-title">Routebestand</div>
+        <p class="group-help">
+          De app probeert automatisch <code>route.gpx</code> te laden. Je kunt hier ook handmatig een GPX kiezen.
+        </p>
+        <input type="file" id="gpxFileInput" accept=".gpx,application/gpx+xml" />
+        <div class="inline-status" id="gpxStatus"></div>
+      </div>
+
+      <div class="group-card glass">
+        <button class="secondary-action full" id="exportBtn">Exporteer tochtdata</button>
+        <button class="danger-action full" id="resetBtn">Tocht resetten</button>
+      </div>
+
+      <div class="version-tag">Dodentocht 2026 Companion · Apple-style PWA</div>
+    </section>
+  </main>
+
+  <div id="toastStack" class="toast-stack"></div>
+
+  <nav class="tabbar">
+    <button class="tab-btn active" data-screen="dashboard" aria-label="Vandaag">
+      <svg viewBox="0 0 24 24"><path d="M4 13h3l2-6 4 12 2-6h5"/></svg>
+      <span>Vandaag</span>
+    </button>
+    <button class="tab-btn" data-screen="checkpoints" aria-label="Posten">
+      <svg viewBox="0 0 24 24"><path d="M7 6h13M7 12h13M7 18h13M3.5 6h.01M3.5 12h.01M3.5 18h.01"/></svg>
+      <span>Posten</span>
+    </button>
+    <button class="tab-btn" data-screen="map" aria-label="Kaart">
+      <svg viewBox="0 0 24 24"><path d="M9 18l-6 3V6l6-3 6 3 6-3v15l-6 3-6-3zM9 3v15M15 6v15"/></svg>
+      <span>Kaart</span>
+    </button>
+    <button class="tab-btn" data-screen="more" aria-label="Meer">
+      <svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/></svg>
+      <span>Meer</span>
+    </button>
+  </nav>
+
+  <div class="modal-overlay" id="checklistModal">
+    <div class="modal-sheet glass-strong">
+      <div class="modal-handle"></div>
+      <div class="section-eyebrow">SNELLE CHECK</div>
+      <h2>Voet- & lichaamscheck</h2>
+      <div class="checklist-items" id="checklistItems"></div>
+      <div class="checklist-warning" id="checklistWarning" hidden>
+        Bij ernstige klachten: stop indien nodig en zoek hulp op de eerstvolgende officiële post.
+      </div>
+      <div class="modal-actions">
+        <button class="secondary-action" id="checklistCancelBtn">Sluiten</button>
+        <button class="primary-action" id="checklistSaveBtn">Opslaan</button>
+      </div>
+    </div>
   </div>
-  <button class="icon-btn" id="fullscreenBtn" aria-label="Volledig scherm" title="Volledig scherm">⤢</button>
-</header>
 
-<!-- ======================= SCREENS ======================= -->
-<main id="screens">
-
-  <!-- ---------- DASHBOARD ---------- -->
-  <section id="screen-dashboard" class="screen active">
-
-    <div class="progressbar">
-      <div class="progressbar-fill" id="progressFill"></div>
-    </div>
-
-    <div class="glass card hero-card">
-      <div class="hero-main">
-        <div class="hero-number" id="distanceValue">0.0</div>
-        <div class="hero-unit">km afgelegd</div>
-      </div>
-      <div class="hero-sub" id="remainingLabel">100.0 km te gaan</div>
-    </div>
-
-    <div class="grid-2">
-      <div class="glass card stat-card">
-        <div class="stat-label">Tempo</div>
-        <div class="stat-value" id="paceValue">–</div>
-        <div class="stat-unit">km/u gemiddeld</div>
-      </div>
-      <div class="glass card stat-card">
-        <div class="stat-label">Snelheid nu</div>
-        <div class="stat-value" id="speedValue">–</div>
-        <div class="stat-unit">km/u</div>
-      </div>
-      <div class="glass card stat-card">
-        <div class="stat-label">Tijd onderweg</div>
-        <div class="stat-value" id="elapsedValue">00:00</div>
-        <div class="stat-unit" id="pauseValue">0 min pauze</div>
-      </div>
-      <div class="glass card stat-card">
-        <div class="stat-label">Verwachte finish</div>
-        <div class="stat-value" id="etaValue">–:–</div>
-        <div class="stat-unit" id="marginValue">–</div>
-      </div>
-    </div>
-
-    <div class="glass card next-cp-card" id="nextCpCard">
-      <div class="next-cp-top">
-        <span class="eyebrow">Volgende post</span>
-        <span class="next-cp-dist" id="nextCpDist">–</span>
-      </div>
-      <div class="next-cp-name" id="nextCpName">–</div>
-      <div class="next-cp-meta" id="nextCpMeta">–</div>
-    </div>
-
-    <div class="glass card status-banner" id="statusBanner">
-      <div class="status-banner-title" id="statusBannerTitle">Comfortabel op schema</div>
-      <div class="status-banner-text" id="statusBannerText">Houd je eigen ritme.</div>
-    </div>
-
-    <div id="toastStack" class="toast-stack"></div>
-
-    <div class="dashboard-actions">
-      <button class="pill-btn" id="startBtn">Start tocht</button>
-      <button class="pill-btn ghost" id="pauseToggleBtn" style="display:none;">Pauze starten</button>
-      <button class="pill-btn ghost" id="checklistBtn">Voet- &amp; lichaamscheck</button>
-      <button class="pill-btn ghost" id="recalibrateBtn">GPS herkalibreren</button>
-    </div>
-  </section>
-
-  <!-- ---------- CONTROLEPOSTEN ---------- -->
-  <section id="screen-checkpoints" class="screen">
-    <h1 class="screen-title">Controleposten</h1>
-    <div id="checkpointList" class="checkpoint-list"></div>
-  </section>
-
-  <!-- ---------- KAART ---------- -->
-  <section id="screen-map" class="screen">
-    <div class="map-wrap">
-      <div id="leafletMap" class="leaflet-map"></div>
-      <div class="map-empty" id="mapEmpty">Route nog niet geladen. Kies een GPX-bestand bij Correctie.</div>
-
-      <div class="map-toolbar">
-        <button class="map-btn" id="mapResetBtn" aria-label="Centreer op volledige route" title="Centreer op volledige route">⤢</button>
-        <button class="map-btn" id="mapFollowBtn" aria-label="Volg mijn positie" title="Volg mijn positie">◎</button>
-      </div>
-
-      <div class="map-legend glass">
-        <div class="map-legend-row"><span class="legend-dot me"></span>Jouw positie</div>
-        <div class="map-legend-row"><span class="legend-dot cp"></span>Controlepost</div>
-        <div class="map-legend-row"><span class="legend-dot cp done"></span>Al bereikt</div>
-      </div>
-    </div>
-  </section>
-
-  <!-- ---------- CORRECTIE ---------- -->
-  <section id="screen-correction" class="screen">
-    <h1 class="screen-title">Manuele correctie</h1>
-    <p class="screen-hint">Gebruik dit scherm als GPS uitvalt of afwijkt.</p>
-
-    <div class="glass card form-card">
-      <label class="field-label" for="corrKm">Huidige kilometer</label>
-      <input type="number" id="corrKm" step="0.1" min="0" max="100" inputmode="decimal" />
-
-      <label class="field-label" for="corrCp">Huidige controlepost</label>
-      <select id="corrCp"></select>
-
-      <label class="field-label" for="corrStart">Starttijd</label>
-      <input type="datetime-local" id="corrStart" />
-
-      <label class="field-label" for="corrPause">Totale pauzetijd (minuten)</label>
-      <input type="number" id="corrPause" min="0" step="1" inputmode="numeric" />
-
-      <button class="pill-btn" id="applyCorrectionBtn">Toepassen</button>
-    </div>
-
-    <div class="glass card form-card">
-      <div class="field-label">Route-bestand (GPX)</div>
-      <p class="screen-hint">Als route.gpx niet automatisch geladen is, kies hier het officiële GPX-bestand van de organisatie.</p>
-      <input type="file" id="gpxFileInput" accept=".gpx" />
-      <div id="gpxStatus" class="gpx-status"></div>
-    </div>
-  </section>
-
-  <!-- ---------- INSTELLINGEN ---------- -->
-  <section id="screen-settings" class="screen">
-    <h1 class="screen-title">Instellingen</h1>
-
-    <div class="glass card settings-card">
-      <div class="setting-row">
-        <div>
-          <div class="setting-title">Energiebesparende GPS</div>
-          <div class="setting-desc">Minder frequente GPS-updates, langere batterijduur.</div>
-        </div>
-        <label class="switch"><input type="checkbox" id="powerSavingToggle" /><span></span></label>
-      </div>
-      <div class="setting-row">
-        <div>
-          <div class="setting-title">Herinneringen</div>
-          <div class="setting-desc">Drinken, eten, voetcheck en afstandsmeldingen.</div>
-        </div>
-        <label class="switch"><input type="checkbox" id="remindersToggle" /><span></span></label>
-      </div>
-      <div class="setting-row">
-        <div>
-          <div class="setting-title">Meldingen op scherm-uit</div>
-          <div class="setting-desc">Vraagt toestemming voor browsernotificaties.</div>
-        </div>
-        <button class="pill-btn small" id="notifPermBtn">Toestaan</button>
-      </div>
-      <div class="setting-row">
-        <div>
-          <div class="setting-title">Beeldscherm actief houden</div>
-          <div class="setting-desc">Voorkomt dat het scherm automatisch dooft.</div>
-        </div>
-        <label class="switch"><input type="checkbox" id="wakeLockToggle" /><span></span></label>
-      </div>
-    </div>
-
-    <div class="glass card settings-card">
-      <div class="setting-row" style="border-bottom:none; flex-direction:column; align-items:stretch; gap:10px;">
-        <div>
-          <div class="setting-title">Offline kaarttegels</div>
-          <div class="setting-desc">Download de straatkaart van de hele route (~2500 tegels, ongeveer 35-40 MB) zodat de Kaart-tab ook zonder bereik werkt. Doe dit thuis via wifi, vóór de tocht — dit duurt enkele minuten.</div>
-        </div>
-        <button class="pill-btn ghost full" id="downloadTilesBtn" style="margin-bottom:0;">Kaarttegels downloaden</button>
-        <div id="tileDownloadStatus" class="gpx-status"></div>
-      </div>
-    </div>
-
-    <div class="glass card settings-card">
-      <button class="pill-btn ghost full" id="exportBtn">Exporteer tochtdata (JSON)</button>
-      <button class="pill-btn ghost full danger" id="resetBtn">Tocht resetten</button>
-    </div>
-
-    <p class="version-tag">Dodentocht 2026 Companion · offline-first PWA</p>
-  </section>
-
-</main>
-
-<!-- ======================= BOTTOM NAV ======================= -->
-<nav class="tabbar">
-  <button class="tab-btn active" data-screen="dashboard">
-    <span class="tab-icon">●</span><span>Vandaag</span>
-  </button>
-  <button class="tab-btn" data-screen="checkpoints">
-    <span class="tab-icon">▤</span><span>Posten</span>
-  </button>
-  <button class="tab-btn" data-screen="map">
-    <span class="tab-icon">◈</span><span>Kaart</span>
-  </button>
-  <button class="tab-btn" data-screen="correction">
-    <span class="tab-icon">✎</span><span>Correctie</span>
-  </button>
-  <button class="tab-btn" data-screen="settings">
-    <span class="tab-icon">⚙</span><span>Instellingen</span>
-  </button>
-</nav>
-
-<!-- ======================= CHECKLIST MODAL ======================= -->
-<div id="checklistModal" class="modal-overlay">
-  <div class="modal-sheet glass">
-    <div class="modal-handle"></div>
-    <h2 class="modal-title">Voet- &amp; lichaamscheck</h2>
-    <div class="checklist-items" id="checklistItems"></div>
-    <div id="checklistWarning" class="checklist-warning" style="display:none;">
-      Zoek rustig medische hulp op de eerstvolgende officiële controlepost.
-    </div>
-    <div class="modal-actions">
-      <button class="pill-btn ghost" id="checklistCancelBtn">Sluiten</button>
-      <button class="pill-btn" id="checklistSaveBtn">Opslaan</button>
-    </div>
-  </div>
-</div>
-
-<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
-<script src="checkpoints.js"></script>
-<script src="route.js"></script>
-<script src="map.js"></script>
-<script src="app.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+  <script src="checkpoints.js"></script>
+  <script src="route.js"></script>
+  <script src="map.js"></script>
+  <script src="app.js"></script>
 </body>
 </html>
