@@ -56,3 +56,24 @@ Extra branding:
 - laatste kwart en finishzone krijgen extra goudaccenten
 - extra donkere nachtweergave tussen 00:00 en 06:00
 - checkpointkaarten voelen meer als event/race cards
+
+
+## Live volgen (v4)
+
+Nieuwe bestanden:
+- `live.html` — kijkpagina voor mama
+- `live.js` — realtime viewer
+- `live-server-example.js` — endpoints voor Express
+
+In `app.js` en `live.js` staat:
+`const LIVE_API_BASE = "https://YOUR-SERVER.example.com";`
+
+Vervang dat door het HTTPS-adres van je eigen backend.
+
+Werking:
+1. Open in de Dodentocht-app de tab **Live**.
+2. Start live delen.
+3. Kopieer de geheime kijklink.
+4. Mama opent `live.html?code=...`.
+5. De kijkpagina stuurt een heartbeat.
+6. De app toont **Mama kijkt live mee** zolang die heartbeat recent is.

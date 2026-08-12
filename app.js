@@ -1,3 +1,5 @@
+const LIVE_API_BASE = "https://YOUR-SERVER.example.com";
+
 "use strict";
 
 const STORAGE_KEY = "doto2026_state_v2";
@@ -7,6 +9,15 @@ const TOTAL_KM = 100;
 const DEADLINE_HOURS = 24;
 
 const route = new Route();
+const liveState = {
+  active: false,
+  code: localStorage.getItem("doto2026_live_code") || "",
+  lastUploadAt: null,
+  viewerActive: false,
+  uploadTimer: null,
+  presenceTimer: null
+};
+
 let mapView = null;
 let watchId = null;
 let wakeLockSentinel = null;
@@ -1307,3 +1318,189 @@ async function boot() {
 }
 
 boot();
+
+
+
+function makeLiveCode() {
+  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  let out = "";
+  const bytes = new Uint8Array(8);
+  crypto.getRandomValues(bytes);
+  for (let i = 0; i < bytes.length; i++) out += alphabet[bytes[i] % alphabet.length];
+  return out;
+}
+
+function liveViewerUrl() {
+  if (!liveState.code) return "";
+  const url = new URL("live.html", location.href);
+  url.searchParams.set("code", liveState.code);
+  return url.toString();
+}
+
+function renderLiveUi() {
+  const pill = document.getElementById("liveStatusPill");
+  const btn = document.getElementById("liveToggleBtn");
+  const subtitle = document.getElementById("liveSubtitle");
+  const codeEl = document.getElementById("liveCodeValue");
+  const last = document.getElementById("liveLastUpdate");
+  const viewer = document.getElementById("viewerStatus");
+  const viewerText = document.getElementById("viewerStatusText");
+
+  pill?.classList.toggle("on", liveState.active);
+  if (pill) pill.textContent = liveState.active ? "LIVE" : "UIT";
+  if (btn) btn.textContent = liveState.active ? "Stop live" : "Start live";
+  if (subtitle) subtitle.textContent = liveState.active ? "Je positie wordt gedeeld" : "Nog niet actief";
+  if (codeEl) codeEl.textContent = liveState.code || "—";
+  if (last) last.textContent = liveState.lastUploadAt ? `${Math.max(0, Math.round((Date.now()-liveState.lastUploadAt)/1000))} sec geleden` : "—";
+
+  viewer?.classList.toggle("active", liveState.viewerActive);
+  if (viewerText) viewerText.textContent = liveState.viewerActive ? "Mama kijkt live mee" : "Mama kijkt niet live";
+}
+
+async function liveApi(path, options = {}) {
+  if (!LIVE_API_BASE || LIVE_API_BASE.includes("YOUR-SERVER")) {
+    throw new Error("LIVE_API_BASE is nog niet ingesteld.");
+  }
+
+  const res = await fetch(`${LIVE_API_BASE}${path}`, {
+    ...options,
+    headers: {
+      "Content-Type": "application/json",
+      ...(options.headers || {})
+    }
+  });
+
+  if (!res.ok) throw new Error(`Live API fout ${res.status}`);
+  return res.status === 204 ? null : res.json();
+}
+
+async function startLiveSharing() {
+  if (!liveState.code) {
+    liveState.code = makeLiveCode();
+    localStorage.setItem("doto2026_live_code", liveState.code);
+  }
+
+  liveState.active = true;
+  renderLiveUi();
+
+  try {
+    await liveApi(`/api/dodentocht/live/${encodeURIComponent(liveState.code)}/start`, {
+      method: "POST",
+      body: JSON.stringify({ startedAt: Date.now() })
+    });
+  } catch (e) {
+    console.warn(e);
+  }
+
+  startLiveTimers();
+}
+
+async function stopLiveSharing() {
+  liveState.active = false;
+  clearInterval(liveState.uploadTimer);
+  clearInterval(liveState.presenceTimer);
+  liveState.uploadTimer = null;
+  liveState.presenceTimer = null;
+  liveState.viewerActive = false;
+  renderLiveUi();
+
+  try {
+    await liveApi(`/api/dodentocht/live/${encodeURIComponent(liveState.code)}/stop`, {
+      method: "POST"
+    });
+  } catch (e) {
+    console.warn(e);
+  }
+}
+
+async function uploadLiveSnapshot() {
+  if (!liveState.active || !liveState.code) return;
+
+  const nextIndex = CHECKPOINTS.findIndex(cp => cp.km > state.distanceKm);
+  const next = nextIndex >= 0 ? CHECKPOINTS[nextIndex] : CHECKPOINTS[CHECKPOINTS.length - 1];
+
+  const payload = {
+    timestamp: Date.now(),
+    distanceKm: state.distanceKm,
+    speedKmh: Number.isFinite(state.currentSpeedKmh) ? state.currentSpeedKmh : null,
+    elapsedMs: state.startTime ? Date.now() - state.startTime : null,
+    nextCheckpoint: next ? {
+      name: next.name,
+      location: next.location || "",
+      km: next.km
+    } : null,
+    battery: null,
+    position: window.__lastLivePosition || null
+  };
+
+  try {
+    if (navigator.getBattery) {
+      const battery = await navigator.getBattery();
+      payload.battery = Math.round(battery.level * 100);
+    }
+  } catch {}
+
+  try {
+    await liveApi(`/api/dodentocht/live/${encodeURIComponent(liveState.code)}/update`, {
+      method: "POST",
+      body: JSON.stringify(payload)
+    });
+    liveState.lastUploadAt = Date.now();
+    renderLiveUi();
+  } catch (e) {
+    console.warn("Live upload mislukt", e);
+  }
+}
+
+async function pollViewerPresence() {
+  if (!liveState.active || !liveState.code) return;
+  try {
+    const info = await liveApi(`/api/dodentocht/live/${encodeURIComponent(liveState.code)}/presence`);
+    liveState.viewerActive = !!info?.viewerActive;
+  } catch {
+    liveState.viewerActive = false;
+  }
+  renderLiveUi();
+}
+
+function startLiveTimers() {
+  clearInterval(liveState.uploadTimer);
+  clearInterval(liveState.presenceTimer);
+  liveState.uploadTimer = setInterval(uploadLiveSnapshot, 10000);
+  liveState.presenceTimer = setInterval(pollViewerPresence, 8000);
+  uploadLiveSnapshot();
+  pollViewerPresence();
+}
+
+function initLiveUi() {
+  document.getElementById("liveToggleBtn")?.addEventListener("click", () => {
+    liveState.active ? stopLiveSharing() : startLiveSharing();
+  });
+
+  document.getElementById("copyLiveLinkBtn")?.addEventListener("click", async () => {
+    if (!liveState.code) {
+      liveState.code = makeLiveCode();
+      localStorage.setItem("doto2026_live_code", liveState.code);
+      renderLiveUi();
+    }
+    const url = liveViewerUrl();
+    try {
+      await navigator.clipboard.writeText(url);
+      notify("Kijklink gekopieerd");
+    } catch {
+      prompt("Kopieer deze link:", url);
+    }
+  });
+
+  document.getElementById("openLiveViewerBtn")?.addEventListener("click", () => {
+    if (!liveState.code) {
+      liveState.code = makeLiveCode();
+      localStorage.setItem("doto2026_live_code", liveState.code);
+    }
+    window.open(liveViewerUrl(), "_blank");
+    renderLiveUi();
+  });
+
+  renderLiveUi();
+  setInterval(renderLiveUi, 1000);
+}
