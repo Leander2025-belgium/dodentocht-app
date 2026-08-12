@@ -154,7 +154,7 @@ class MapView {
     }
 
     if (projection) {
-      this.updateProgress(projection.km, projection);
+      if (projection) this._updateOffRouteUI(projection);
     }
 
     if (this.followMode) {

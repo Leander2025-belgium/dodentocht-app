@@ -77,3 +77,16 @@ Werking:
 4. Mama opent `live.html?code=...`.
 5. De kijkpagina stuurt een heartbeat.
 6. De app toont **Mama kijkt live mee** zolang die heartbeat recent is.
+
+
+## v4.2 — snelheid
+
+- `nu km/u` gebruikt nu de echte GPS-snelheid van `GeolocationCoordinates.speed`.
+- De snelheid wordt dus ook zichtbaar wanneer je buiten de Dodentocht-route test.
+- Boven 12 km/u wordt de beweging beschouwd als vervoer en mag die GPS-fix de Dodentocht-afstand niet vooruit laten springen.
+- De live viewer kan dezelfde actuele GPS-snelheid meesturen.
+
+### Extra beveiliging v4.2
+- GPS mag vóór **Start tocht** wel snelheid/positie tonen, maar nooit kilometers toevoegen.
+- Boven **12 km/u** blijft de echte GPS-snelheid zichtbaar, maar routevoortgang wordt geblokkeerd.
+- De kaart tekent afgelegde route op basis van geaccepteerde Dodentocht-afstand, niet een ruwe routeprojectie.

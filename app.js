@@ -1,4 +1,7 @@
 const LIVE_API_BASE = "https://YOUR-SERVER.example.com";
+const MAX_WALK_SPEED_KMH = 12;
+const MIN_GPS_SPEED_KMH = 0.2;
+const GPS_SPEED_STALE_MS = 20000;
 
 "use strict";
 
@@ -17,6 +20,10 @@ const liveState = {
   uploadTimer: null,
   presenceTimer: null
 };
+
+let currentGpsSpeedKmh = null;
+let currentRouteSpeedKmh = null;
+let lastGpsSpeedUpdatedAt = 0;
 
 let mapView = null;
 let watchId = null;
@@ -338,6 +345,9 @@ function recalibrateGps() {
 }
 
 function onGpsFix(pos) {
+  const gpsSpeedKmh = normalizeGpsSpeedKmh(pos.coords);
+  if (gpsSpeedKmh !== null) setCurrentGpsSpeed(gpsSpeedKmh);
+
   const { latitude, longitude, accuracy } = pos.coords;
 
   state.lastRawPosition = {
@@ -365,23 +375,37 @@ function onGpsFix(pos) {
 
   if (!projection) return;
 
+  // GPS and speed may be tested before the walk starts, but that must never
+  // change Dodentocht progress.
+  if (!state.startTime) {
+    if (mapView) {
+      mapView.setUserPosition(latitude, longitude, accuracy || 15, projection);
+      mapView.updateProgress(state.distanceKm, projection);
+    }
+    setGpsStatus("gps-active");
+    return;
+  }
+
   const previousM = state.distanceKm * 1000;
   const candidateM = projection.km * 1000;
   const deltaM = candidateM - previousM;
 
   let accept = false;
+  const vehicleSpeedBlocked =
+    Number.isFinite(currentGpsSpeedKmh) &&
+    currentGpsSpeedKmh > MAX_WALK_SPEED_KMH;
 
-  if (deltaM >= -BACKWARD_TOLERANCE_M && deltaM <= FORWARD_JUMP_LIMIT_M) {
+  if (!vehicleSpeedBlocked && deltaM >= -BACKWARD_TOLERANCE_M && deltaM <= FORWARD_JUMP_LIMIT_M) {
     accept = true;
     pendingBackwardFixes = 0;
     pendingForwardJump = null;
-  } else if (deltaM < -BACKWARD_TOLERANCE_M) {
+  } else if (!vehicleSpeedBlocked && deltaM < -BACKWARD_TOLERANCE_M) {
     pendingBackwardFixes += 1;
     if (pendingBackwardFixes >= 3) {
       accept = true;
       pendingBackwardFixes = 0;
     }
-  } else if (deltaM > FORWARD_JUMP_LIMIT_M) {
+  } else if (!vehicleSpeedBlocked && deltaM > FORWARD_JUMP_LIMIT_M) {
     if (
       pendingForwardJump &&
       Math.abs(pendingForwardJump.km - projection.km) < 0.08
@@ -407,6 +431,7 @@ function onGpsFix(pos) {
       accuracy || 15,
       projection
     );
+    mapView.updateProgress(state.distanceKm, projection);
   }
 
   trackSpeedSample(state.distanceKm);
@@ -755,7 +780,44 @@ function computeStatus() {
 
 /* Render */
 
+
+function normalizeGpsSpeedKmh(coords) {
+  if (!coords) return null;
+
+  // iOS/Safari gives coords.speed in meter/second when available.
+  if (Number.isFinite(coords.speed) && coords.speed >= 0) {
+    const kmh = coords.speed * 3.6;
+    return kmh >= MIN_GPS_SPEED_KMH ? kmh : 0;
+  }
+
+  return null;
+}
+
+function setCurrentGpsSpeed(kmh) {
+  currentGpsSpeedKmh = Number.isFinite(kmh) ? kmh : null;
+  lastGpsSpeedUpdatedAt = Date.now();
+}
+
+function isLikelyWalkingSpeed(kmh) {
+  return Number.isFinite(kmh) && kmh <= MAX_WALK_SPEED_KMH;
+}
+
+
+function getMovementModeLabel() {
+  if (!Number.isFinite(currentGpsSpeedKmh)) return null;
+  if (currentGpsSpeedKmh > MAX_WALK_SPEED_KMH) return "Vervoer gedetecteerd · afstand telt niet mee";
+  return null;
+}
+
 function renderDashboard() {
+  if (lastGpsSpeedUpdatedAt && Date.now() - lastGpsSpeedUpdatedAt > GPS_SPEED_STALE_MS) {
+    currentGpsSpeedKmh = null;
+  }
+
+  if (Number.isFinite(currentGpsSpeedKmh)) {
+    state.currentSpeedKmh = currentGpsSpeedKmh;
+  }
+
   const distance = Math.max(0, Math.min(TOTAL_KM, state.distanceKm));
 
   document.body.classList.toggle("deep-zone", distance >= 75 && distance < 95);
@@ -781,7 +843,7 @@ function renderDashboard() {
 
   const elapsedH = walkingElapsedMs() / 3600000;
   const avgSpeed = elapsedH > 0.03 ? distance / elapsedH : null;
-  const liveSpeed = currentSpeedKmh();
+  const liveSpeed = Number.isFinite(currentGpsSpeedKmh) ? currentGpsSpeedKmh : null;
 
   document.getElementById("paceValue").textContent =
     avgSpeed ? avgSpeed.toFixed(1) : "—";
