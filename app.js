@@ -1,4 +1,4 @@
-const APP_VERSION = "4.4.0";
+const APP_VERSION = "4.5.0";
 const LIVE_API_BASE = String(window.DODENTOCHT_CONFIG?.liveApiBase || "")
   .trim()
   .replace(/\/+$/, "");
@@ -1528,7 +1528,7 @@ boot();
 function makeLiveCode() {
   const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
   let out = "";
-  const bytes = new Uint8Array(8);
+  const bytes = new Uint8Array(12);
   crypto.getRandomValues(bytes);
   for (let i = 0; i < bytes.length; i++) out += alphabet[bytes[i] % alphabet.length];
   return out;

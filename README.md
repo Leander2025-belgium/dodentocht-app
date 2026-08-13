@@ -1,78 +1,80 @@
-# Dodentocht 2026 Companion
+# Dodentocht live-server
 
-Een persoonlijke, onofficiële wandelcompanion voor de 57e 100 km Dodentocht op vrijdag 14 augustus 2026. De app combineert route, GPS-voortgang, controleposten, tijdsmarge, pauzes en lichaamschecks in één mobiele PWA.
+Deze Cloudflare Worker verzorgt het optionele privé live delen van de Dodentocht-app. Livegegevens worden opgeslagen in Cloudflare D1 en verdwijnen wanneer de wandelaar live delen stopt. Oude, vergeten sessies worden na 48 uur automatisch verwijderd.
 
-**Open de app:** https://leander2025-belgium.github.io/dodentocht-app/
+## Eigenschappen
 
-> Deze app vervangt de officiële controlebadge, bewegwijzering, veiligheidsinstructies of medische hulp niet. Volg tijdens het evenement altijd de aanwijzingen van de organisatie.
+- alleen de ingestelde GitHub Pages-origin mag de API vanuit een browser aanspreken;
+- livecodes bestaan uit 8 tot 16 tekens; nieuwe codes hebben 12 tekens;
+- invoer, coördinaten en maximale aanvraaggrootte worden gevalideerd;
+- antwoorden worden nooit door browsers of tussenservers gecachet;
+- een kijker-heartbeat toont in de app of mama actief meekijkt;
+- D1 bewaart de actuele sessie ook wanneer een Worker opnieuw start;
+- bij iedere nieuwe live sessie worden achtergebleven sessies ouder dan 48 uur verwijderd.
 
-## Wat de app kan
+## Eenmalig publiceren
 
-- GPS-voortgang langs de meegeleverde GPX-route
-- bescherming tegen GPS-sprongen en vervoer boven 12 km/u
-- actuele snelheid, ook op iPhone wanneer `coords.speed` ontbreekt
-- kaart met afgelegde route, volgende post en route-afwijking
-- officiële controlepostafstanden, openingsuren en bevoorrading voor 2026
-- persoonlijke ETA, tijdsmarge, pauzes en mijlpalen
-- drink-, eet- en voetcheckherinneringen
-- handmatige correctie en export van tochtdata
-- offline app-shell, route en voortgang
-- optioneel privé live delen via een eigen HTTPS-backend
-
-Alle persoonlijke tochtdata blijven standaard lokaal in de browser. Alleen wanneer live delen is geconfigureerd én bewust gestart, verstuurt de app een live snapshot naar de ingestelde server.
-
-## Installeren op iPhone
-
-1. Open de app in Safari.
-2. Tik op **Deel**.
-3. Kies **Zet op beginscherm**.
-4. Open de nieuwe Dodentocht-app minstens één keer met internet, zodat de offlinebestanden worden opgeslagen.
-
-OpenStreetMap-kaarttegels worden bewust niet massaal offline opgeslagen. De GPX-route en je voortgang blijven offline beschikbaar; de straatkaart kan zonder internet leeg zijn.
-
-## Lokaal testen
-
-De app is statisch en heeft geen buildstap nodig. Start wel een lokale webserver; rechtstreeks openen via `file://` ondersteunt service workers en GPS niet correct.
+Vereisten: Node.js 20+ en een gratis Cloudflare-account.
 
 ```bash
-python -m http.server 8080
+cd server
+npm install
+npx wrangler login
+npx wrangler d1 create dodentocht-live
 ```
 
-Open daarna `http://localhost:8080`.
+Cloudflare toont na het laatste commando een `database_id`. Vervang in `wrangler.jsonc` het bestaande `database_id` wanneer je een andere Cloudflare-database gebruikt.
 
-Controleer vóór gebruik buiten:
+Voer daarna uit:
 
-1. locatie-toestemming;
-2. route en kaart;
-3. start, pauze en handmatige correctie;
-4. herladen van de app met behoud van voortgang;
-5. offline herladen nadat de app één keer online geopend is.
+```bash
+npm run db:remote
+npm run deploy
+```
 
-## Optioneel live delen
+Wrangler toont een adres zoals:
 
-Live delen staat veilig uit zolang geen server is ingesteld. Vul in `config.js` alleen het HTTPS-adres in:
+```text
+https://dodentocht-live-api.<jouw-subdomein>.workers.dev
+```
+
+Controleer de server:
+
+```text
+https://dodentocht-live-api.<jouw-subdomein>.workers.dev/health
+```
+
+Het antwoord moet `{"ok":true,"service":"dodentocht-live-api"}` zijn.
+
+Vul ten slotte het adres in de `config.js` in de hoofdmap in:
 
 ```js
 window.DODENTOCHT_CONFIG = Object.freeze({
-  liveApiBase: "https://jouw-server.example.com"
+  liveApiBase: "https://dodentocht-live-api.<jouw-subdomein>.workers.dev"
 });
 ```
 
-`live-server-example.js` toont de vereiste Express-routes. Voor productie zijn daarnaast HTTPS, CORS-beperking, rate limiting, invoervalidatie, verloop van sessies en persistente opslag nodig.
+Publiceer die ene wijziging opnieuw naar GitHub Pages. Er horen nooit Cloudflare-tokens of andere geheime sleutels in `config.js`.
 
-## Techniek
+## Lokaal testen
 
-- vanilla HTML, CSS en JavaScript
-- Leaflet 1.9.4 met OpenStreetMap
-- IndexedDB voor het GPX-bestand
-- `localStorage` voor instellingen en voortgang
-- service worker voor versiebeheer en offline fallback
-- GitHub Pages voor hosting
+```bash
+cd server
+npm install
+npm run db:local
+npm run dev
+```
 
-## Gegevens en bronnen
+De Worker is dan normaal beschikbaar op `http://localhost:8787`. Gebruik voor een lokale front-endtest `http://localhost:8080`, omdat die origin al is toegestaan.
 
-- evenement: 57e 100 km Dodentocht, 14 augustus 2026 om 21.00 uur
-- controleposten: officiële Dodentocht-informatie voor 2026
-- route: `route.gpx` in deze repository; last-minute parcourswijzigingen blijven mogelijk
+## API
 
-Controleer kort voor de start altijd de meest recente officiële informatie op https://www.dodentocht.be/.
+- `POST /api/dodentocht/live/:code/start`
+- `POST /api/dodentocht/live/:code/update`
+- `POST /api/dodentocht/live/:code/stop`
+- `GET /api/dodentocht/live/:code`
+- `POST /api/dodentocht/live/:code/viewer-heartbeat`
+- `GET /api/dodentocht/live/:code/presence`
+- `GET /health`
+
+De livecode is het geheim. Deel alleen de volledige kijklink met mensen die de positie mogen zien.

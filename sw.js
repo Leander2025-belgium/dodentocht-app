@@ -1,19 +1,19 @@
 "use strict";
 
-const CACHE_NAME = "dodentocht-2026-shell-v4-4-0";
+const CACHE_NAME = "dodentocht-2026-shell-v4-5-0";
 
 const APP_SHELL = [
   "./",
   "./index.html",
   "./live.html",
-  "./style.css?v=4.4.0",
-  "./config.js?v=4.4.0",
-  "./app.js?v=4.4.0",
-  "./live.js?v=4.4.0",
-  "./route.js?v=4.4.0",
-  "./map.js?v=4.4.0",
-  "./checkpoints.js?v=4.4.0",
-  "./manifest.webmanifest?v=4.4.0",
+  "./style.css?v=4.5.0",
+  "./config.js?v=4.5.0",
+  "./app.js?v=4.5.0",
+  "./live.js?v=4.5.0",
+  "./route.js?v=4.5.0",
+  "./map.js?v=4.5.0",
+  "./checkpoints.js?v=4.5.0",
+  "./manifest.webmanifest?v=4.5.0",
   "./icon-192.png",
   "./icon-512.png",
   "./icon-maskable-512.png",

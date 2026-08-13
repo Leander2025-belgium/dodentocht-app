@@ -1,9 +1,16 @@
 {
-  "name": "dodentocht-2026-companion",
-  "version": "4.4.0",
+  "name": "dodentocht-live-api",
+  "version": "1.0.0",
   "private": true,
+  "type": "module",
   "scripts": {
-    "check:js": "node --check app.js && node --check checkpoints.js && node --check config.js && node --check live.js && node --check live-server-example.js && node --check map.js && node --check route.js && node --check sw.js",
-    "test": "npm run check:js && node tests/smoke.mjs"
+    "check": "node --check src/worker.js && node --test test/*.test.mjs",
+    "db:local": "wrangler d1 migrations apply dodentocht-live --local",
+    "db:remote": "wrangler d1 migrations apply dodentocht-live --remote",
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy"
+  },
+  "devDependencies": {
+    "wrangler": "4.122.0"
   }
 }

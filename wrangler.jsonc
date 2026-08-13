@@ -1,0 +1,21 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "dodentocht-live-api",
+  "main": "src/worker.js",
+  "compatibility_date": "2026-08-13",
+  "observability": {
+    "enabled": true
+  },
+  "vars": {
+    "ALLOWED_ORIGINS": "https://leander2025-belgium.github.io,http://localhost:8080,http://127.0.0.1:8080",
+    "SESSION_TTL_HOURS": "48"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "dodentocht-live",
+      "database_id": "fb254df9-bf6f-490d-bce4-f47a66b6b60e",
+      "migrations_dir": "migrations"
+    }
+  ]
+}
