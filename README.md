@@ -1,92 +1,78 @@
-# Dodentocht 2026 — Apple redesign
+# Dodentocht 2026 Companion
 
-Vervang in je GitHub-repository deze bestanden:
+Een persoonlijke, onofficiële wandelcompanion voor de 57e 100 km Dodentocht op vrijdag 14 augustus 2026. De app combineert route, GPS-voortgang, controleposten, tijdsmarge, pauzes en lichaamschecks in één mobiele PWA.
 
-- index.html
-- style.css
-- app.js
-- route.js
-- map.js
-- checkpoints.js
-- sw.js
-- manifest.webmanifest
+**Open de app:** https://leander2025-belgium.github.io/dodentocht-app/
 
-Laat je bestaande `route.gpx` staan.
-Laat ook `icon-192.png` / `icon-512.png` staan als je die al hebt.
+> Deze app vervangt de officiële controlebadge, bewegwijzering, veiligheidsinstructies of medische hulp niet. Volg tijdens het evenement altijd de aanwijzingen van de organisatie.
 
-## Belangrijk
+## Wat de app kan
 
-De kaart gebruikt Leaflet + OpenStreetMap als online kaartlaag.
-De GPX-route zelf wordt lokaal opgeslagen en blijft beschikbaar.
-De code doet bewust GEEN bulk-download van OpenStreetMap-tegels.
+- GPS-voortgang langs de meegeleverde GPX-route
+- bescherming tegen GPS-sprongen en vervoer boven 12 km/u
+- actuele snelheid, ook op iPhone wanneer `coords.speed` ontbreekt
+- kaart met afgelegde route, volgende post en route-afwijking
+- officiële controlepostafstanden, openingsuren en bevoorrading voor 2026
+- persoonlijke ETA, tijdsmarge, pauzes en mijlpalen
+- drink-, eet- en voetcheckherinneringen
+- handmatige correctie en export van tochtdata
+- offline app-shell, route en voortgang
+- optioneel privé live delen via een eigen HTTPS-backend
 
-## Test
+Alle persoonlijke tochtdata blijven standaard lokaal in de browser. Alleen wanneer live delen is geconfigureerd én bewust gestart, verstuurt de app een live snapshot naar de ingestelde server.
 
-1. Open de app via HTTPS/GitHub Pages.
-2. Geef locatie-toestemming.
-3. Open Kaart.
-4. Tik op de locatiepijl om follow-mode te activeren.
-5. Test de app ook buiten zodat GPS nauwkeuriger is.
-6. Gebruik Manuele correctie om tijdelijk verschillende kilometerstanden te testen.
+## Installeren op iPhone
 
-## Extra
+1. Open de app in Safari.
+2. Tik op **Deel**.
+3. Kies **Zet op beginscherm**.
+4. Open de nieuwe Dodentocht-app minstens één keer met internet, zodat de offlinebestanden worden opgeslagen.
 
-Voor echte volledig offline straatkaarten moet je later een provider/self-hosted tile-oplossing gebruiken die offline gebruik toestaat.
+OpenStreetMap-kaarttegels worden bewust niet massaal offline opgeslagen. De GPX-route en je voortgang blijven offline beschikbaar; de straatkaart kan zonder internet leeg zijn.
 
+## Lokaal testen
 
-## Dodentocht branding
+De app is statisch en heeft geen buildstap nodig. Start wel een lokale webserver; rechtstreeks openen via `file://` ondersteunt service workers en GPS niet correct.
 
-Deze versie gebruikt:
-- bijna zwarte / grafiet achtergrond
-- rood-oranje als hoofdaccent
-- amber/goud richting het laatste kwart
-- goud vanaf 95 km
-- groen uitsluitend voor successtatussen / bereikte posten
-- blauwe live locatie op de kaart voor duidelijke GPS-herkenning
+```bash
+python -m http.server 8080
+```
 
+Open daarna `http://localhost:8080`.
 
-## V3 Dodentocht-stijl
+Controleer vóór gebruik buiten:
 
-Extra branding:
-- 100 KM / DODENTOCHT 2026 / 57e editie / Bornem
-- race chips en fase-indicator
-- mijlpaalkaart voor 25 / 50 / 75 / 100 km
-- automatische mijlpaalmeldingen
-- warmere rood-oranje-goud gradients
-- laatste kwart en finishzone krijgen extra goudaccenten
-- extra donkere nachtweergave tussen 00:00 en 06:00
-- checkpointkaarten voelen meer als event/race cards
+1. locatie-toestemming;
+2. route en kaart;
+3. start, pauze en handmatige correctie;
+4. herladen van de app met behoud van voortgang;
+5. offline herladen nadat de app één keer online geopend is.
 
+## Optioneel live delen
 
-## Live volgen (v4)
+Live delen staat veilig uit zolang geen server is ingesteld. Vul in `config.js` alleen het HTTPS-adres in:
 
-Nieuwe bestanden:
-- `live.html` — kijkpagina voor mama
-- `live.js` — realtime viewer
-- `live-server-example.js` — endpoints voor Express
+```js
+window.DODENTOCHT_CONFIG = Object.freeze({
+  liveApiBase: "https://jouw-server.example.com"
+});
+```
 
-In `app.js` en `live.js` staat:
-`const LIVE_API_BASE = "https://YOUR-SERVER.example.com";`
+`live-server-example.js` toont de vereiste Express-routes. Voor productie zijn daarnaast HTTPS, CORS-beperking, rate limiting, invoervalidatie, verloop van sessies en persistente opslag nodig.
 
-Vervang dat door het HTTPS-adres van je eigen backend.
+## Techniek
 
-Werking:
-1. Open in de Dodentocht-app de tab **Live**.
-2. Start live delen.
-3. Kopieer de geheime kijklink.
-4. Mama opent `live.html?code=...`.
-5. De kijkpagina stuurt een heartbeat.
-6. De app toont **Mama kijkt live mee** zolang die heartbeat recent is.
+- vanilla HTML, CSS en JavaScript
+- Leaflet 1.9.4 met OpenStreetMap
+- IndexedDB voor het GPX-bestand
+- `localStorage` voor instellingen en voortgang
+- service worker voor versiebeheer en offline fallback
+- GitHub Pages voor hosting
 
+## Gegevens en bronnen
 
-## v4.2 — snelheid
+- evenement: 57e 100 km Dodentocht, 14 augustus 2026 om 21.00 uur
+- controleposten: officiële Dodentocht-informatie voor 2026
+- route: `route.gpx` in deze repository; last-minute parcourswijzigingen blijven mogelijk
 
-- `nu km/u` gebruikt nu de echte GPS-snelheid van `GeolocationCoordinates.speed`.
-- De snelheid wordt dus ook zichtbaar wanneer je buiten de Dodentocht-route test.
-- Boven 12 km/u wordt de beweging beschouwd als vervoer en mag die GPS-fix de Dodentocht-afstand niet vooruit laten springen.
-- De live viewer kan dezelfde actuele GPS-snelheid meesturen.
-
-### Extra beveiliging v4.2
-- GPS mag vóór **Start tocht** wel snelheid/positie tonen, maar nooit kilometers toevoegen.
-- Boven **12 km/u** blijft de echte GPS-snelheid zichtbaar, maar routevoortgang wordt geblokkeerd.
-- De kaart tekent afgelegde route op basis van geaccepteerde Dodentocht-afstand, niet een ruwe routeprojectie.
+Controleer kort voor de start altijd de meest recente officiële informatie op https://www.dodentocht.be/.

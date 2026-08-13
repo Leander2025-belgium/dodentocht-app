@@ -1,4 +1,6 @@
-const LIVE_API_BASE = "https://YOUR-SERVER.example.com";
+const LIVE_API_BASE = String(window.DODENTOCHT_CONFIG?.liveApiBase || "")
+  .trim()
+  .replace(/\/+$/, "");
 
 const params = new URLSearchParams(location.search);
 const code = params.get("code") || "";
@@ -41,7 +43,7 @@ function renderSnapshot(data) {
   document.getElementById("batteryValue").textContent =
     Number.isFinite(data.battery) ? `${data.battery}%` : "—";
 
-  if (data.position?.lat && data.position?.lon) {
+  if (Number.isFinite(data.position?.lat) && Number.isFinite(data.position?.lon)) {
     const latlng = [data.position.lat, data.position.lon];
     if (!marker) {
       marker = L.circleMarker(latlng, {
@@ -69,7 +71,7 @@ function updateAge() {
 }
 
 async function heartbeat() {
-  if (!code || LIVE_API_BASE.includes("YOUR-SERVER")) return;
+  if (!code || !/^https:\/\//i.test(LIVE_API_BASE)) return;
   try {
     await fetch(`${LIVE_API_BASE}/api/dodentocht/live/${encodeURIComponent(code)}/viewer-heartbeat`, {
       method: "POST",
@@ -84,13 +86,15 @@ async function refresh() {
     setLiveBadge(false, "Geen kijkcode");
     return;
   }
-  if (LIVE_API_BASE.includes("YOUR-SERVER")) {
+  if (!/^https:\/\//i.test(LIVE_API_BASE)) {
     setLiveBadge(false, "Server nog niet ingesteld");
     return;
   }
 
   try {
-    const res = await fetch(`${LIVE_API_BASE}/api/dodentocht/live/${encodeURIComponent(code)}`);
+    const res = await fetch(`${LIVE_API_BASE}/api/dodentocht/live/${encodeURIComponent(code)}`, {
+      cache: "no-store"
+    });
     if (!res.ok) throw new Error();
     const data = await res.json();
     renderSnapshot(data.snapshot);
@@ -105,3 +109,10 @@ heartbeat();
 setInterval(refresh, 5000);
 setInterval(heartbeat, 8000);
 ageTimer = setInterval(updateAge, 1000);
+
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") {
+    refresh();
+    heartbeat();
+  }
+});

@@ -1,0 +1,9 @@
+{
+  "name": "dodentocht-2026-companion",
+  "version": "4.4.0",
+  "private": true,
+  "scripts": {
+    "check:js": "node --check app.js && node --check checkpoints.js && node --check config.js && node --check live.js && node --check live-server-example.js && node --check map.js && node --check route.js && node --check sw.js",
+    "test": "npm run check:js && node tests/smoke.mjs"
+  }
+}

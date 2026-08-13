@@ -2,22 +2,45 @@
   "name": "Dodentocht 2026 Companion",
   "short_name": "Dodentocht",
   "description": "Persoonlijke Dodentocht 2026 wandelcompanion met GPS, route en controleposten.",
+  "id": "./",
   "start_url": "./",
   "scope": "./",
+  "lang": "nl-BE",
   "display": "standalone",
   "background_color": "#07090d",
   "theme_color": "#07090d",
   "orientation": "portrait",
+  "categories": ["health", "navigation", "sports"],
   "icons": [
     {
       "src": "icon-192.png",
       "sizes": "192x192",
-      "type": "image/png"
+      "type": "image/png",
+      "purpose": "any"
     },
     {
       "src": "icon-512.png",
       "sizes": "512x512",
-      "type": "image/png"
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "icon-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Kaart openen",
+      "short_name": "Kaart",
+      "url": "./?screen=map"
+    },
+    {
+      "name": "Controleposten",
+      "short_name": "Posten",
+      "url": "./?screen=checkpoints"
     }
   ]
 }

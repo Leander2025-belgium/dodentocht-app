@@ -1,4 +1,7 @@
-const LIVE_API_BASE = "https://YOUR-SERVER.example.com";
+const APP_VERSION = "4.4.0";
+const LIVE_API_BASE = String(window.DODENTOCHT_CONFIG?.liveApiBase || "")
+  .trim()
+  .replace(/\/+$/, "");
 const MAX_WALK_SPEED_KMH = 12;
 const MIN_GPS_SPEED_KMH = 0.2;
 const GPS_SPEED_STALE_MS = 20000;
@@ -22,6 +25,7 @@ const liveState = {
 };
 
 let currentGpsSpeedKmh = null;
+let previousSpeedFix = null;
 let currentRouteSpeedKmh = null;
 let lastGpsSpeedUpdatedAt = 0;
 
@@ -32,6 +36,8 @@ let saveTimer = null;
 let pendingBackwardFixes = 0;
 let pendingForwardJump = null;
 let currentStatusLevel = "green";
+let liveUiInitialized = false;
+let liveUiRefreshTimer = null;
 
 const MIN_ACCEPT_ACCURACY_M = 80;
 const BACKWARD_TOLERANCE_M = 30;
@@ -52,6 +58,7 @@ function defaultState() {
     totalPauseMs: 0,
 
     speedSamples: [],
+    currentSpeedKmh: null,
     checkpointLog: {},
 
     settings: {
@@ -271,18 +278,21 @@ function afterRouteLoaded() {
 
   renderCheckpointList();
   renderDashboard();
-  initLiveUi();
 }
 
 /* Navigation */
 
 function showScreen(name) {
   document.querySelectorAll(".screen").forEach(screen => {
-    screen.classList.toggle("active", screen.id === `screen-${name}`);
+    const isActive = screen.id === `screen-${name}`;
+    screen.classList.toggle("active", isActive);
+    screen.setAttribute("aria-hidden", String(!isActive));
   });
 
   document.querySelectorAll(".tab-btn").forEach(btn => {
-    btn.classList.toggle("active", btn.dataset.screen === name);
+    const isActive = btn.dataset.screen === name;
+    btn.classList.toggle("active", isActive);
+    btn.setAttribute("aria-selected", String(isActive));
   });
 
   if (name === "checkpoints") renderCheckpointList();
@@ -345,7 +355,21 @@ function recalibrateGps() {
 }
 
 function onGpsFix(pos) {
-  const gpsSpeedKmh = normalizeGpsSpeedKmh(pos.coords);
+  let gpsSpeedKmh = normalizeGpsSpeedKmh(pos.coords);
+
+  // Safari/iOS levert coords.speed soms niet. Bereken dan de snelheid uit
+  // twee opeenvolgende ruwe fixes, met een correctie voor GPS-ruis.
+  if (gpsSpeedKmh === null) {
+    gpsSpeedKmh = fallbackGpsSpeedKmh(pos);
+  } else {
+    previousSpeedFix = {
+      lat: pos.coords.latitude,
+      lon: pos.coords.longitude,
+      accuracy: Number.isFinite(pos.coords.accuracy) ? pos.coords.accuracy : 30,
+      t: Number.isFinite(pos.timestamp) ? pos.timestamp : Date.now()
+    };
+  }
+
   if (gpsSpeedKmh !== null) setCurrentGpsSpeed(gpsSpeedKmh);
 
   const { latitude, longitude, accuracy } = pos.coords;
@@ -355,6 +379,14 @@ function onGpsFix(pos) {
     lon: longitude,
     accuracy: accuracy || null,
     t: Date.now()
+  };
+
+  // Blijft lokaal totdat de wandelaar live delen bewust inschakelt.
+  window.__lastLivePosition = {
+    lat: latitude,
+    lon: longitude,
+    accuracy: accuracy || null,
+    timestamp: Date.now()
   };
 
   if (!route.loaded) {
@@ -458,10 +490,12 @@ function setGpsStatus(mode) {
   const label = document.getElementById("statusLabel");
   const dot = document.getElementById("statusDot");
 
-  if (mode === "gps-active") label.textContent = "GPS actief";
-  else if (mode === "gps-weak") label.textContent = "GPS onnauwkeurig";
-  else if (mode === "gps-lost") label.textContent = "Geen GPS-signaal";
-  else label.textContent = "Klaar om te starten";
+  let text = "Klaar om te starten";
+  if (mode === "gps-active") text = "GPS actief";
+  else if (mode === "gps-weak") text = "GPS onnauwkeurig";
+  else if (mode === "gps-lost") text = "Geen GPS-signaal";
+
+  label.textContent = navigator.onLine ? text : `Offline · ${text}`;
 
   dot.className = `status-dot ${currentStatusLevel}`;
 }
@@ -781,6 +815,66 @@ function computeStatus() {
 /* Render */
 
 
+function haversineMetersRaw(lat1, lon1, lat2, lon2) {
+  const R = 6371000;
+  const toRad = value => value * Math.PI / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) *
+    Math.sin(dLon / 2) ** 2;
+  return 2 * R * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+function fallbackGpsSpeedKmh(pos) {
+  if (!pos?.coords) return null;
+
+  const fix = {
+    lat: pos.coords.latitude,
+    lon: pos.coords.longitude,
+    accuracy: Number.isFinite(pos.coords.accuracy) ? pos.coords.accuracy : 30,
+    t: Number.isFinite(pos.timestamp) ? pos.timestamp : Date.now()
+  };
+
+  if (fix.accuracy > 100) {
+    previousSpeedFix = null;
+    return null;
+  }
+
+  if (!previousSpeedFix) {
+    previousSpeedFix = fix;
+    return null;
+  }
+
+  if (previousSpeedFix.accuracy > 100) {
+    previousSpeedFix = fix;
+    return null;
+  }
+
+  const dtSec = (fix.t - previousSpeedFix.t) / 1000;
+  if (dtSec < 1.5 || dtSec > 30) {
+    previousSpeedFix = fix;
+    return null;
+  }
+
+  const meters = haversineMetersRaw(
+    previousSpeedFix.lat,
+    previousSpeedFix.lon,
+    fix.lat,
+    fix.lon
+  );
+  const noiseFloor = Math.min(
+    25,
+    (previousSpeedFix.accuracy + fix.accuracy) * 0.18
+  );
+  const usefulMeters = Math.max(0, meters - noiseFloor);
+  previousSpeedFix = fix;
+
+  const kmh = (usefulMeters / dtSec) * 3.6;
+  return Number.isFinite(kmh) && kmh >= 0 ? kmh : null;
+}
+
 function normalizeGpsSpeedKmh(coords) {
   if (!coords) return null;
 
@@ -814,9 +908,9 @@ function renderDashboard() {
     currentGpsSpeedKmh = null;
   }
 
-  if (Number.isFinite(currentGpsSpeedKmh)) {
-    state.currentSpeedKmh = currentGpsSpeedKmh;
-  }
+  state.currentSpeedKmh = Number.isFinite(currentGpsSpeedKmh)
+    ? currentGpsSpeedKmh
+    : null;
 
   const distance = Math.max(0, Math.min(TOTAL_KM, state.distanceKm));
 
@@ -839,6 +933,7 @@ function renderDashboard() {
   document.getElementById("remainingLabel").textContent = `${remaining.toFixed(1)} km resterend`;
   document.getElementById("progressPercent").textContent = `${progress.toFixed(0)}%`;
   document.getElementById("progressFill").style.width = `${progress}%`;
+  document.getElementById("progressTrack")?.setAttribute("aria-valuenow", progress.toFixed(1));
   document.getElementById("elapsedCompact").textContent = `${fmtHM(walkingElapsedMs())} onderweg`;
 
   const elapsedH = walkingElapsedMs() / 3600000;
@@ -1123,11 +1218,17 @@ function renderChecklist() {
 
 function openChecklist() {
   renderChecklist();
-  document.getElementById("checklistModal").classList.add("open");
+  const modal = document.getElementById("checklistModal");
+  modal.classList.add("open");
+  modal.setAttribute("aria-hidden", "false");
+  document.getElementById("checklistCancelBtn")?.focus();
 }
 
 function closeChecklist() {
-  document.getElementById("checklistModal").classList.remove("open");
+  const modal = document.getElementById("checklistModal");
+  modal.classList.remove("open");
+  modal.setAttribute("aria-hidden", "true");
+  document.getElementById("checklistBtn")?.focus();
 }
 
 function saveChecklist() {
@@ -1184,6 +1285,7 @@ function releaseWakeLock() {
 
 function exportData() {
   const payload = {
+    appVersion: APP_VERSION,
     exportedAt: nowIso(),
     state,
     routeLoaded: route.loaded,
@@ -1236,7 +1338,11 @@ document.querySelectorAll(".tab-btn").forEach(btn => {
 
 document.getElementById("fullscreenBtn").addEventListener("click", () => {
   if (!document.fullscreenElement) {
-    document.documentElement.requestFullscreen?.();
+    if (document.documentElement.requestFullscreen) {
+      document.documentElement.requestFullscreen().catch(() => {});
+    } else {
+      showToast("Voeg de app toe aan je beginscherm voor volledig scherm.");
+    }
   } else {
     document.exitFullscreen?.();
   }
@@ -1320,6 +1426,31 @@ document.getElementById("mapFollowBtn").addEventListener("click", () => {
   }
 });
 
+document.getElementById("checklistModal").addEventListener("click", event => {
+  if (event.target === event.currentTarget) closeChecklist();
+});
+
+document.addEventListener("keydown", event => {
+  if (
+    event.key === "Escape" &&
+    document.getElementById("checklistModal").classList.contains("open")
+  ) {
+    closeChecklist();
+  }
+});
+
+window.addEventListener("online", () => {
+  renderDashboard();
+  updateConnectivityUi();
+  showToast("Internetverbinding hersteld.");
+});
+
+window.addEventListener("offline", () => {
+  renderDashboard();
+  updateConnectivityUi();
+  showToast("Offline: route en voortgang blijven beschikbaar.");
+});
+
 document.addEventListener("visibilitychange", () => {
   if (
     document.visibilityState === "visible" &&
@@ -1349,6 +1480,8 @@ setInterval(tick, 1000);
 async function boot() {
   applySettingsToUI();
   populateCorrectionForm();
+  initLiveUi();
+  updateConnectivityUi();
 
   mapView = new MapView("leafletMap", route, CHECKPOINTS);
 
@@ -1371,9 +1504,17 @@ async function boot() {
   renderDashboard();
   renderCheckpointList();
 
+  const requestedScreen = new URLSearchParams(location.search).get("screen");
+  if (["dashboard", "checkpoints", "map", "live", "more"].includes(requestedScreen)) {
+    showScreen(requestedScreen);
+  }
+
   if ("serviceWorker" in navigator) {
     try {
-      await navigator.serviceWorker.register("sw.js");
+      const registration = await navigator.serviceWorker.register("sw.js", {
+        updateViaCache: "none"
+      });
+      registration.update().catch(() => {});
     } catch (err) {
       console.warn("Service worker registratie mislukt", err);
     }
@@ -1393,6 +1534,17 @@ function makeLiveCode() {
   return out;
 }
 
+function isLiveConfigured() {
+  return /^https:\/\//i.test(LIVE_API_BASE);
+}
+
+function updateConnectivityUi() {
+  const el = document.getElementById("connectionStatus");
+  if (!el) return;
+  el.textContent = navigator.onLine ? "Online" : "Offline · route blijft beschikbaar";
+  el.classList.toggle("offline", !navigator.onLine);
+}
+
 function liveViewerUrl() {
   if (!liveState.code) return "";
   const url = new URL("live.html", location.href);
@@ -1408,20 +1560,38 @@ function renderLiveUi() {
   const last = document.getElementById("liveLastUpdate");
   const viewer = document.getElementById("viewerStatus");
   const viewerText = document.getElementById("viewerStatusText");
+  const copyBtn = document.getElementById("copyLiveLinkBtn");
+  const openBtn = document.getElementById("openLiveViewerBtn");
+  const note = document.getElementById("liveNote");
+  const configured = isLiveConfigured();
 
   pill?.classList.toggle("on", liveState.active);
-  if (pill) pill.textContent = liveState.active ? "LIVE" : "UIT";
+  if (pill) pill.textContent = liveState.active ? "LIVE" : configured ? "UIT" : "NIET INGESTELD";
   if (btn) btn.textContent = liveState.active ? "Stop live" : "Start live";
-  if (subtitle) subtitle.textContent = liveState.active ? "Je positie wordt gedeeld" : "Nog niet actief";
+  if (btn) btn.disabled = !configured;
+  if (copyBtn) copyBtn.disabled = !configured;
+  if (openBtn) openBtn.disabled = !configured;
+  if (subtitle) {
+    subtitle.textContent = liveState.active
+      ? "Je positie wordt gedeeld"
+      : configured
+        ? "Nog niet actief"
+        : "Live server nog niet ingesteld";
+  }
   if (codeEl) codeEl.textContent = liveState.code || "—";
   if (last) last.textContent = liveState.lastUploadAt ? `${Math.max(0, Math.round((Date.now()-liveState.lastUploadAt)/1000))} sec geleden` : "—";
 
   viewer?.classList.toggle("active", liveState.viewerActive);
   if (viewerText) viewerText.textContent = liveState.viewerActive ? "Mama kijkt live mee" : "Mama kijkt niet live";
+  if (note) {
+    note.textContent = configured
+      ? "Houd deze link privé. Iedereen met de code kan je livepositie bekijken zolang live delen actief is."
+      : "Live delen is veilig uitgeschakeld tot een HTTPS-server in config.js is ingesteld.";
+  }
 }
 
 async function liveApi(path, options = {}) {
-  if (!LIVE_API_BASE || LIVE_API_BASE.includes("YOUR-SERVER")) {
+  if (!isLiveConfigured()) {
     throw new Error("LIVE_API_BASE is nog niet ingesteld.");
   }
 
@@ -1443,9 +1613,6 @@ async function startLiveSharing() {
     localStorage.setItem("doto2026_live_code", liveState.code);
   }
 
-  liveState.active = true;
-  renderLiveUi();
-
   try {
     await liveApi(`/api/dodentocht/live/${encodeURIComponent(liveState.code)}/start`, {
       method: "POST",
@@ -1453,9 +1620,16 @@ async function startLiveSharing() {
     });
   } catch (e) {
     console.warn(e);
+    liveState.active = false;
+    renderLiveUi();
+    showToast("Live delen kon niet starten. Controleer de serverinstelling.");
+    return;
   }
 
+  liveState.active = true;
+  renderLiveUi();
   startLiveTimers();
+  showToast("Live delen is gestart.");
 }
 
 async function stopLiveSharing() {
@@ -1474,6 +1648,8 @@ async function stopLiveSharing() {
   } catch (e) {
     console.warn(e);
   }
+
+  showToast("Live delen is gestopt.");
 }
 
 async function uploadLiveSnapshot() {
@@ -1485,8 +1661,12 @@ async function uploadLiveSnapshot() {
   const payload = {
     timestamp: Date.now(),
     distanceKm: state.distanceKm,
-    speedKmh: Number.isFinite(state.currentSpeedKmh) ? state.currentSpeedKmh : null,
-    elapsedMs: state.startTime ? Date.now() - state.startTime : null,
+    speedKmh:
+      Number.isFinite(currentGpsSpeedKmh) &&
+      Date.now() - lastGpsSpeedUpdatedAt <= GPS_SPEED_STALE_MS
+        ? currentGpsSpeedKmh
+        : null,
+    elapsedMs: state.startTime ? walkingElapsedMs() : null,
     nextCheckpoint: next ? {
       name: next.name,
       location: next.location || "",
@@ -1536,6 +1716,9 @@ function startLiveTimers() {
 }
 
 function initLiveUi() {
+  if (liveUiInitialized) return;
+  liveUiInitialized = true;
+
   document.getElementById("liveToggleBtn")?.addEventListener("click", () => {
     liveState.active ? stopLiveSharing() : startLiveSharing();
   });
@@ -1565,5 +1748,5 @@ function initLiveUi() {
   });
 
   renderLiveUi();
-  setInterval(renderLiveUi, 1000);
+  liveUiRefreshTimer = setInterval(renderLiveUi, 1000);
 }

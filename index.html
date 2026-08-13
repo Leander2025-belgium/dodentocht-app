@@ -2,19 +2,21 @@
 <html lang="nl">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1, user-scalable=no" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>Dodentocht 2026</title>
 
+  <meta name="description" content="Persoonlijke Dodentocht 2026 wandelcompanion met GPS, route, controleposten en offline voortgang." />
   <meta name="theme-color" content="#07090d" />
   <meta name="color-scheme" content="dark" />
+  <meta name="format-detection" content="telephone=no" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <meta name="apple-mobile-web-app-title" content="Dodentocht" />
 
-  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="manifest" href="manifest.webmanifest?v=4.4.0" />
   <link rel="apple-touch-icon" href="icon-192.png" />
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" />
-  <link rel="stylesheet" href="style.css" />
+  <link rel="stylesheet" href="style.css?v=4.4.0" />
 </head>
 
 <body>
@@ -24,7 +26,7 @@
   <header class="app-header">
     <div class="header-left">
       <div class="brand-lockup"><span class="brand-100">100 KM</span><span class="app-kicker">DODENTOCHT 2026</span></div>
-      <div class="status-pill" id="statusPill">
+      <div class="status-pill" id="statusPill" role="status" aria-live="polite">
         <span class="status-dot" id="statusDot"></span>
         <span id="statusLabel">Klaar om te starten</span>
       </div>
@@ -39,7 +41,7 @@
 
   <main id="screens">
     <!-- TODAY -->
-    <section class="screen active" id="screen-dashboard">
+    <section class="screen active" id="screen-dashboard" role="tabpanel" aria-hidden="false">
       <div class="hero-shell glass-strong">
         <div class="hero-topline">
           <span id="heroStatusText">Klaar voor de start</span>
@@ -53,7 +55,7 @@
 
         <div class="hero-caption">van Bornem naar Bornem · 100 km</div>
 
-        <div class="progress-track" aria-hidden="true">
+        <div class="progress-track" id="progressTrack" role="progressbar" aria-label="Voortgang" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
           <div class="progress-fill" id="progressFill"></div>
         </div>
 
@@ -92,7 +94,7 @@
         </div>
       </div>
 
-      <div class="status-card glass" id="statusBanner">
+      <div class="status-card glass" id="statusBanner" role="status">
         <div class="status-icon" id="statusBannerIcon">✓</div>
         <div>
           <div class="status-title" id="statusBannerTitle">Comfortabel op schema</div>
@@ -110,7 +112,7 @@
     </section>
 
     <!-- CHECKPOINTS -->
-    <section class="screen" id="screen-checkpoints">
+    <section class="screen" id="screen-checkpoints" role="tabpanel" aria-hidden="true">
       <div class="screen-heading">
         <div>
           <div class="section-eyebrow">ROUTE</div>
@@ -123,7 +125,7 @@
     </section>
 
     <!-- MAP -->
-    <section class="screen map-screen" id="screen-map">
+    <section class="screen map-screen" id="screen-map" role="tabpanel" aria-hidden="true">
       <div class="map-wrap">
         <div id="leafletMap" class="leaflet-map"></div>
 
@@ -164,7 +166,7 @@
 
     <!-- MORE -->
     
-<section class="screen" id="screen-live" data-screen-panel="live">
+<section class="screen" id="screen-live" data-screen-panel="live" role="tabpanel" aria-hidden="true">
   <div class="screen-header">
     <div>
       <div class="section-eyebrow">LIVE VOLGEN</div>
@@ -203,7 +205,7 @@
       <button class="secondary-action" id="openLiveViewerBtn">Open kijkpagina</button>
     </div>
 
-    <div class="live-note">
+    <div class="live-note" id="liveNote">
       Houd deze link privé. Iedereen met de code kan je livepositie bekijken zolang live delen actief is.
     </div>
   </div>
@@ -218,7 +220,7 @@
 </section>
 
 
-<section class="screen" id="screen-more">
+<section class="screen" id="screen-more" role="tabpanel" aria-hidden="true">
       <div class="screen-heading">
         <div>
           <div class="section-eyebrow">BEHEER</div>
@@ -228,6 +230,14 @@
 
       <div class="group-card glass">
         <div class="group-title">GPS & batterij</div>
+
+        <div class="setting-row">
+          <div>
+            <strong>Verbinding</strong>
+            <span>Je route en voortgang blijven ook offline beschikbaar.</span>
+          </div>
+          <span class="connection-status" id="connectionStatus">Controleren…</span>
+        </div>
 
         <label class="setting-row">
           <div>
@@ -302,27 +312,27 @@
         <button class="danger-action full" id="resetBtn">Tocht resetten</button>
       </div>
 
-      <div class="version-tag">Dodentocht 2026 Companion · Apple-style PWA</div>
+      <div class="version-tag">Dodentocht 2026 Companion · v4.4.0</div>
     </section>
   </main>
 
-  <div id="toastStack" class="toast-stack"></div>
+  <div id="toastStack" class="toast-stack" aria-live="polite" aria-atomic="false"></div>
 
-  <nav class="tabbar">
-    <button class="tab-btn active" data-screen="dashboard" aria-label="Vandaag">
+  <nav class="tabbar" aria-label="Hoofdnavigatie" role="tablist">
+    <button class="tab-btn active" data-screen="dashboard" aria-label="Vandaag" role="tab" aria-selected="true" aria-controls="screen-dashboard">
       <svg viewBox="0 0 24 24"><path d="M4 13h3l2-6 4 12 2-6h5"/></svg>
       <span>Vandaag</span>
     </button>
-    <button class="tab-btn" data-screen="checkpoints" aria-label="Posten">
+    <button class="tab-btn" data-screen="checkpoints" aria-label="Posten" role="tab" aria-selected="false" aria-controls="screen-checkpoints">
       <svg viewBox="0 0 24 24"><path d="M7 6h13M7 12h13M7 18h13M3.5 6h.01M3.5 12h.01M3.5 18h.01"/></svg>
       <span>Posten</span>
     </button>
-    <button class="tab-btn" data-screen="map" aria-label="Kaart">
+    <button class="tab-btn" data-screen="map" aria-label="Kaart" role="tab" aria-selected="false" aria-controls="screen-map">
       <svg viewBox="0 0 24 24"><path d="M9 18l-6 3V6l6-3 6 3 6-3v15l-6 3-6-3zM9 3v15M15 6v15"/></svg>
       <span>Kaart</span>
     </button>
     
-<button class="tab-btn" data-screen="live" aria-label="Live">
+<button class="tab-btn" data-screen="live" aria-label="Live" role="tab" aria-selected="false" aria-controls="screen-live">
   <span class="tab-icon" aria-hidden="true">
     <svg viewBox="0 0 24 24" width="23" height="23" fill="none">
       <circle cx="12" cy="12" r="3.2" fill="currentColor"/>
@@ -333,17 +343,17 @@
   <span>Live</span>
 </button>
 
-<button class="tab-btn" data-screen="more" aria-label="Meer">
+<button class="tab-btn" data-screen="more" aria-label="Meer" role="tab" aria-selected="false" aria-controls="screen-more">
       <svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/></svg>
       <span>Meer</span>
     </button>
   </nav>
 
-  <div class="modal-overlay" id="checklistModal">
-    <div class="modal-sheet glass-strong">
+  <div class="modal-overlay" id="checklistModal" aria-hidden="true">
+    <div class="modal-sheet glass-strong" role="dialog" aria-modal="true" aria-labelledby="checklistTitle">
       <div class="modal-handle"></div>
       <div class="section-eyebrow">SNELLE CHECK</div>
-      <h2>Voet- & lichaamscheck</h2>
+      <h2 id="checklistTitle">Voet- & lichaamscheck</h2>
       <div class="checklist-items" id="checklistItems"></div>
       <div class="checklist-warning" id="checklistWarning" hidden>
         Bij ernstige klachten: stop indien nodig en zoek hulp op de eerstvolgende officiële post.
@@ -356,9 +366,10 @@
   </div>
 
   <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
-  <script src="checkpoints.js"></script>
-  <script src="route.js"></script>
-  <script src="map.js"></script>
-  <script src="app.js"></script>
+  <script src="config.js?v=4.4.0"></script>
+  <script src="checkpoints.js?v=4.4.0"></script>
+  <script src="route.js?v=4.4.0"></script>
+  <script src="map.js?v=4.4.0"></script>
+  <script src="app.js?v=4.4.0"></script>
 </body>
 </html>

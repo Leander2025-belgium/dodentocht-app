@@ -15,6 +15,8 @@ class MapView {
 
     this.followMode = false;
     this.reachedIds = new Set();
+    this.lastProgressKm = null;
+    this.nextCheckpointId = null;
 
     this.routeLine = null;
     this.walkedLine = null;
@@ -51,6 +53,8 @@ class MapView {
     const latlngs = this.route.points.map(p => [p.lat, p.lon]);
 
     if (this.routeLine) this.map.removeLayer(this.routeLine);
+    this.lastProgressKm = null;
+    this.nextCheckpointId = null;
 
     this.routeLine = L.polyline(latlngs, {
       color: "#d9dde6",
@@ -153,9 +157,7 @@ class MapView {
       this.accuracyCircle.setRadius(Math.max(5, accuracyM || 10));
     }
 
-    if (projection) {
-      if (projection) this._updateOffRouteUI(projection);
-    }
+    if (projection) this._updateOffRouteUI(projection);
 
     if (this.followMode) {
       this._followUser(false);
@@ -178,29 +180,45 @@ class MapView {
   updateProgress(distanceKm, projection = null) {
     if (!this.route.loaded) return;
 
-    const walked = this.route.sliceToDistance(distanceKm);
+    const normalizedKm = Math.max(0, Math.min(100, Number(distanceKm) || 0));
+    const progressChanged =
+      this.lastProgressKm === null ||
+      Math.abs(normalizedKm - this.lastProgressKm) >= 0.005;
 
-    if (this.walkedLine) {
-      this.map.removeLayer(this.walkedLine);
-      this.walkedLine = null;
+    // De dashboardweergave ververst elke seconde. Teken de lange GPX-lijn
+    // alleen opnieuw wanneer de afgelegde afstand echt veranderd is.
+    if (progressChanged) {
+      const walked = this.route.sliceToDistance(normalizedKm);
+
+      if (this.walkedLine) {
+        this.map.removeLayer(this.walkedLine);
+        this.walkedLine = null;
+      }
+
+      if (walked.length > 1) {
+        this.walkedLine = L.polyline(walked, {
+          color: "#ff5a36",
+          weight: 6,
+          opacity: 0.95,
+          lineCap: "round",
+          lineJoin: "round"
+        }).addTo(this.map);
+      }
+
+      this.lastProgressKm = normalizedKm;
+      this._updateNextCheckpointMarker(normalizedKm);
     }
 
-    if (walked.length > 1) {
-      this.walkedLine = L.polyline(walked, {
-        color: "#ff5a36",
-        weight: 6,
-        opacity: 0.95,
-        lineCap: "round",
-        lineJoin: "round"
-      }).addTo(this.map);
-    }
-
-    this._updateNextCheckpointMarker(distanceKm);
-    this._updateOffRouteUI(projection);
+    // Een dashboardtick zonder nieuwe GPS-projectie mag een waarschuwing niet
+    // verbergen. Alleen een echte GPS-fix past deze status aan.
+    if (projection) this._updateOffRouteUI(projection);
   }
 
   _updateNextCheckpointMarker(distanceKm) {
     const next = this.checkpoints.find(cp => cp.km > distanceKm + 0.02);
+
+    if ((next?.id ?? null) === this.nextCheckpointId) return;
+    this.nextCheckpointId = next?.id ?? null;
 
     if (this.nextMarker) {
       this.map.removeLayer(this.nextMarker);

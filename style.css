@@ -57,6 +57,23 @@ button, input, select {
 
 button {
   cursor: pointer;
+  touch-action: manipulation;
+}
+
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+select:focus-visible {
+  outline: 3px solid rgba(255, 184, 77, 0.92);
+  outline-offset: 3px;
+}
+
+p,
+code,
+.live-note,
+#liveCodeValue,
+.group-help {
+  user-select: text;
 }
 
 svg {
@@ -579,7 +596,7 @@ body.deep-zone .progress-fill {
 }
 
 .full { width: 100%; }
-button[hidden] { display: none !important; }
+[hidden] { display: none !important; }
 button:disabled { opacity: .42; cursor: default; }
 
 /* Screen headings */
@@ -1005,6 +1022,18 @@ input[type=file] {
   margin: 20px 0 8px;
 }
 
+.connection-status {
+  flex: 0 0 auto;
+  color: #bff9d0;
+  font-size: 12px;
+  font-weight: 800;
+  text-align: right;
+}
+
+.connection-status.offline {
+  color: #ffd391;
+}
+
 /* Tab bar */
 
 .tabbar {
@@ -1049,7 +1078,7 @@ input[type=file] {
 
 .tab-btn.active {
   color: var(--accent);
-  background: rgba(100,240,179,.07);
+  background: rgba(255,90,54,.09);
 }
 
 /* Modal + toast */
